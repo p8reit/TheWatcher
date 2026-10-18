@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
-from . import analytics, chat, predictor, store, npc_store, npc_predictor
+from . import analytics, chat, predictor, store, npc_store, npc_predictor, system_activity
 
 @asynccontextmanager
 async def lifespan(app):
@@ -97,6 +97,11 @@ def analyst(body:ChatRequest):
     except ValueError as e: raise HTTPException(400,str(e))
     except httpx.HTTPError: raise HTTPException(503,'Ollama is unavailable or rejected the request. Check its address, model, and server logs. No cloud fallback was attempted.')
     finally: chat_lock.release()
+
+@app.get('/api/system-activity')
+def system_activity_view(hours:int=Query(6)):
+    try: return system_activity.activity(hours)
+    except ValueError as e: raise HTTPException(400,str(e))
 
 @app.get('/api/npc/status')
 def npc_status(): return npc_store.status()

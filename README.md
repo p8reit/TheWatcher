@@ -133,3 +133,11 @@ Automated coverage includes API/assets, data validation, deduplication, cursor a
 Next work: validate live collection on the target machine; add collection-coverage intervals and scoped retention; collect enough real history; evaluate calibration and seasonal baselines; improve fit clustering and natural-language entity lookup. This release does not fine-tune an LLM.
 
 Independent project; not affiliated with CCP Games or zKillboard. EVE Online and related marks belong to CCP. Source code and provider data have separate rights; no license to redistribute third-party data is implied.
+
+### Recent system activity
+
+Open **System activity** to compare the latest stored ESI NPC/ship/pod report with individually recorded killmails in a rolling 1, 6 or 24 hour window. `/api/system-activity?hours=6` serves the same local-only data. Dashboard refreshes never poll upstream services or invoke a model.
+
+ESI columns show the **latest hourly report inside the window**, not sums across the window. Missing reports display unknown; reports older than two hours are marked stale. Sampled UTC hours indicate reporting samples, not uninterrupted coverage. Ship counts include destruction by NPCs; differences from killmail counts do not prove unpublished PvP kills. Event time, source report time and first receipt time remain separate. Legacy Hunter snapshots are excluded; demo data stays isolated.
+
+Enable the existing `npc-collector` service for ESI reports and the existing `collector` service for zKill R2Z2 discovery. Both remain opt-in and retain their cache/backoff behavior. Historical backfills use daily archives. The view applies the intersection of `NPC_SYSTEM_IDS` and `ANALYSIS_SYSTEM_IDS` when both are configured, ranks up to 200 systems, and explicitly rejects analysis exceeding 200,000 report rows or 50,000 killmails instead of silently truncating counts. Optional authenticated ESI character/corporation killmail ingestion is a future addition; this view does not introduce EVE SSO.
