@@ -83,3 +83,13 @@ def test_api_empty_validation_and_synthetic_isolation(db):
         assert data['items'][0]['source']=='demo'
         assert data['items'][0]['quality']=='synthetic'
         assert 'activity-hours' in client.get('/').text
+
+
+def test_whole_and_fractional_second_killmail_boundaries(db):
+    now=db.replace(microsecond=500000)
+    # Whole-second values sort after fractional timestamps lexically when suffixed Z.
+    kill(now,1,hours=0,receipt=db)
+    kill(db,2,hours=0,receipt=db)
+    cutoff=now-timedelta(hours=1)
+    kill(cutoff,3,hours=0,receipt=db)
+    assert [r['killmail_id'] for r in system_activity.activity(1,now=now)['recent']]==[1,2]

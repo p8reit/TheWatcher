@@ -32,9 +32,13 @@ def activity(hours=6, now=None):
             AND b.source_end>? AND b.source_end<=? AND b.observed_at<=?'''+clause+
             ' ORDER BY b.source_end,b.id,o.system_id LIMIT ?',
             (quality, cutoff.isoformat(), now.isoformat(), now.isoformat(), *params, REPORT_LIMIT+1)).fetchall()
-        kills = c.execute('''SELECT * FROM killmails WHERE killmail_time>? AND killmail_time<=?
-            AND observed_at<=?'''+kill_clause+' ORDER BY killmail_time DESC,id DESC LIMIT ?',
-            (*(d.isoformat().replace('+00:00', 'Z') for d in (cutoff, now, now)), *params, KILL_LIMIT+1)).fetchall()
+        # An indexed coarse range plus parsed bounds handles both whole-second Z
+        # timestamps and fractional-second Z timestamps without lexical ambiguity.
+        kills = c.execute('''SELECT * FROM killmails WHERE killmail_time>=? AND killmail_time<?
+            AND julianday(killmail_time)>julianday(?) AND julianday(killmail_time)<=julianday(?)
+            AND julianday(observed_at)<=julianday(?)'''+kill_clause+' ORDER BY julianday(killmail_time) DESC,id DESC LIMIT ?',
+            (cutoff.strftime('%Y-%m-%dT%H:%M:%S'), (now+timedelta(seconds=1)).strftime('%Y-%m-%dT%H:%M:%S'),
+             cutoff.isoformat(), now.isoformat(), now.isoformat(), *params, KILL_LIMIT+1)).fetchall()
         names = {r['id']: r['name'] for r in c.execute('SELECT id,name FROM entities')}
     if len(reports) > REPORT_LIMIT or len(kills) > KILL_LIMIT:
         raise ValueError('System activity analysis cap reached. Narrow NPC_SYSTEM_IDS or ANALYSIS_SYSTEM_IDS.')
