@@ -1,0 +1,7 @@
+# Explicit opt-in overlay. No ports, new services or database changes.
+services:
+  collector:
+    environment:
+      HUNTER_NPC_SNAPSHOT_DIR: /var/lib/hunter-npc-intel
+    volumes:
+      - ./var/npc-intel:/var/lib/hunter-npc-intel
