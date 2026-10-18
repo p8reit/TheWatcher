@@ -1,0 +1,26 @@
+--- a/test.py
++++ b/test.py
+@@ -22,6 +22,7 @@
+ from worker_liveness import record_heartbeat
+ from worker_status import WorkerStatusReporter
+ from sovereignty import SovereigntyCollector, SovereigntyStructureCollector
++from npc_intel_export import capture_snapshot
+ 
+ 
+ app = Flask(__name__)
+@@ -721,6 +722,15 @@
+                 new_data = response.json()
+                 processed_records = len(new_data)
+ 
++                # Optional analysis export cannot interrupt the primary Hunter pipeline.
++                try:
++                    capture_snapshot(new_data, response.headers)
++                except Exception as export_error:
++                    logging.getLogger('hunter.npc_export').warning(
++                        'NPC snapshot export failed (%s); primary collection continues',
++                        type(export_error).__name__,
++                    )
++
+                 # Update the ETag header for future requests
+                 ESI_ETAG = response.headers.get('ETag')
+ 

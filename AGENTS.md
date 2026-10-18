@@ -1,0 +1,2 @@
+# Working agreements
+Preserve local-only inference. Never invent forecasts or evidence. Treat killmails as partial combat observations, not login/location telemetry. No actual player identities in synthetic fixtures. Use bounded delegation with exclusive file ownership. Run pytest and node --check app/static/app.js before delivery. Do not commit credentials, model weights, databases, or raw production killmail collections. Preserve event time and observation time. Predictive evaluation must be chronological and exclude future observations.

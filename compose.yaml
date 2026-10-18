@@ -1,0 +1,37 @@
+name: new-eden-intel
+x-common: &common
+  build: .
+  env_file: .env
+  environment:
+    DATABASE_PATH: /data/intel.db
+    OMP_NUM_THREADS: "2"
+    OPENBLAS_NUM_THREADS: "2"
+  volumes:
+    - intel-data:/data
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+  read_only: true
+  tmpfs: [/tmp]
+services:
+  web:
+    <<: *common
+    ports: ["127.0.0.1:8088:8080"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  collector:
+    <<: *common
+    profiles: [live]
+    command: [python, -m, app.collector]
+  npc-collector:
+    <<: *common
+    profiles: [npc]
+    command: [python, -m, app.npc_collector]
+volumes:
+  intel-data:
