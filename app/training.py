@@ -31,10 +31,10 @@ def scope_preview(mode='live', days=42, now=None):
         clause += " AND json_extract(raw,'$.solar_system_id') IN (" + ','.join('?' for _ in scope) + ')'
         params.extend(scope)
     with closing(store.connect()) as conn:
-        rows = conn.execute("SELECT json_extract(raw,'$.solar_system_id') AS sid, COUNT(*) AS n "
-                            'FROM killmails WHERE ' + clause + ' GROUP BY sid', params).fetchall()
-        # Read cached names without triggering thousands of background lookups.
-        names = {r['id']: r['name'] for r in conn.execute('SELECT id,name FROM entities')}
-    result['items'] = [{'system_id': r['sid'], 'system_name': names.get(r['sid']),
+        rows = conn.execute("SELECT counts.sid, counts.n, entities.name AS system_name FROM ("
+                            "SELECT json_extract(raw,'$.solar_system_id') AS sid, COUNT(*) AS n "
+                            'FROM killmails WHERE ' + clause + ' GROUP BY sid) AS counts '
+                            'LEFT JOIN entities ON entities.id=counts.sid', params).fetchall()
+    result['items'] = [{'system_id': r['sid'], 'system_name': r['system_name'],
                         'records': r['n'], 'llm_tokens': 0} for r in rows]
     return result

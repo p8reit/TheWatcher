@@ -171,7 +171,11 @@ Numeric IDs, exact fitting signatures and event/receipt timestamps remain intact
 
 ### Train immediately on historical killmail archives
 
-After importing 21–42 completed UTC days of zKill archives into the live project, open **Activity forecasts**, select **Historical killmail archives**, and click **Train & evaluate**. Alternatively:
+In **Activity forecasts**, choose **Live first-seen** or **Historical killmail archives**, then select 1–12 systems from the **System activity estimates** table before clicking **Train & evaluate**. The preview reports records read per system; it does not promise that every record becomes a training label. Live counts include NPC records before PvP filtering. The UI shows the aggregate for the selected systems. Training uses a local statistical model and 0 LLM tokens. The live selection must stay below 50,000 records. A selection narrows `ANALYSIS_SYSTEM_IDS` when configured, and training still applies its chronological and sample checks. The UI requires at least one selected system.
+
+The API accepts an optional selection, for example `POST /api/train?mode=live` or `POST /api/train?mode=historical&days=42` with `{"system_ids":[930001]}`. `GET /api/training-scope?mode=live` or `?mode=historical&days=42` returns per-system record counts, the window and cap metadata. Omitting `system_ids` or posting `{}` preserves the configured automatic defaults.
+
+For historical training, first import 21–42 completed UTC days of zKill archives into the live project. Then open **Activity forecasts**, select **Historical killmail archives**, select systems from **System activity estimates**, and click **Train & evaluate**. Alternatively:
 
 ```sh
 curl -X POST 'http://127.0.0.1:8099/api/train?mode=historical&days=42' \
@@ -186,7 +190,7 @@ An accepted, unexpired live model takes precedence. Otherwise an accepted histor
 
 ### Contextual intelligence workspace
 
-TheWatcher groups its views into observation, analysis, and the local analyst. System names expose Dotlan, zKillboard, and copy-name actions; unresolved names retain the ID-backed zKill action while Dotlan waits for a resolved name. Synthetic demo systems and killmails never link to real evidence. System activity supports name filtering and sorting within the displayed results.
+TheWatcher groups its views into observation, analysis, and the local analyst. System names expose Dotlan, zKillboard, and copy-name actions; unresolved names retain the ID-backed zKill action while Dotlan waits for a resolved name. Synthetic demo systems and killmails never link to real evidence. Sortable table headers on all views sort the displayed rows and toggle direction.
 
 Combat reports (`GET /api/battles?hours=24`, or `6`) group locally observed PvP killmails in the same system when successive events are at most 30 minutes apart, with a maximum two-hour span and at least two kills. These are evidence windows, not confirmed fleets or ongoing battles. Cards expose recorded losses, distinct identified pilots, reported ISK, and killmail evidence. WarBeacon and EVE Tools links open contextual reports for the system and starting UTC hour; review their window and side assignment. They do not publish a saved report or guarantee exactly the local set of kills. URL contracts follow zKillboard's `templates/related.pug` and `classes/RelatedReport.php`.
 
