@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
-from . import analytics, chat, predictor, store, npc_store, npc_predictor, system_activity, names, historical_predictor
+from . import analytics, chat, predictor, store, npc_store, npc_predictor, system_activity, names, historical_predictor, battles
 
 @asynccontextmanager
 async def lifespan(app):
@@ -108,6 +108,11 @@ def analyst(body:ChatRequest):
 @app.get('/api/system-activity')
 def system_activity_view(hours:int=Query(6)):
     try: return system_activity.activity(hours)
+    except ValueError as e: raise HTTPException(400,str(e))
+
+@app.get('/api/battles')
+def battle_reports(hours:int=Query(24)):
+    try: return battles.recent(hours=hours)
     except ValueError as e: raise HTTPException(400,str(e))
 
 @app.get('/api/npc/status')
