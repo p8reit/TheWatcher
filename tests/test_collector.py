@@ -129,3 +129,68 @@ def test_backfill_cli_exits_without_live_poll(db, monkeypatch):
     monkeypatch.setattr(Collector, 'once', unexpected)
     collector.main()
     assert calls == [(1, True)]
+
+
+def r2z2_record(sequence=10):
+    return {'killmail_id':1,'hash':'a'*40,'esi':payload(),
+            'zkb':{'hash':'a'*40,'totalValue':123,'npc':False},
+            'uploaded_at':1234567890,'sequence_id':sequence}
+
+
+def test_live_esi_envelope_preserves_metadata_and_replays(db):
+    store.set_state('r2z2_sequence',10)
+    c=client(lambda r:httpx.Response(200,json=r2z2_record()))
+    assert c.once()
+    stored=store.list_killmails()[0]
+    assert stored['victim']['ship_type_id']==587
+    assert stored['zkb']['totalValue']==123
+    assert stored['uploaded_at']==1234567890 and stored['sequence_id']==10
+    receipt=stored['observed_at']
+    assert store.get_state('r2z2_sequence')==11
+    store.set_state('r2z2_sequence',10)
+    assert c.once()
+    assert len(store.list_killmails())==1
+    assert store.list_killmails()[0]['observed_at']==receipt
+
+
+@pytest.mark.parametrize('change',[
+    {'sequence_id':11}, {'sequence_id':'10'}, {'sequence_id':True},
+    {'sequence':11},
+])
+def test_envelope_sequence_mismatch_does_not_advance(db,change):
+    store.set_state('r2z2_sequence',10)
+    with pytest.raises(FeedGap,match='sequence mismatch'):
+        client(lambda r:httpx.Response(200,json=dict(r2z2_record(),**change))).once()
+    assert store.get_state('r2z2_sequence')==10
+    assert store.list_killmails()==[]
+
+
+@pytest.mark.parametrize('change',[
+    {'esi':None}, {'esi':{}}, {'killmail_id':2},
+    {'killmail':{}}, {'zkb':None},
+])
+def test_invalid_esi_envelope_does_not_advance(db,change):
+    store.set_state('r2z2_sequence',10)
+    with pytest.raises((ValueError,KeyError)):
+        client(lambda r:httpx.Response(200,json=dict(r2z2_record(),**change))).once()
+    assert store.get_state('r2z2_sequence')==10
+    assert store.list_killmails()==[]
+
+
+def test_envelope_id_fallback_and_legacy_wrapper(db):
+    record=r2z2_record()
+    del record['esi']['killmail_id']
+    assert Collector.normalize(record)['killmail_id']==1
+    assert 'killmail_id' not in record['esi'] # normalization does not mutate input
+    legacy={'killmail':payload(),'zkb':{'totalValue':5}}
+    assert Collector.normalize(legacy)['zkb']['totalValue']==5
+
+
+@pytest.mark.parametrize('format',['list','mapping','single'])
+def test_archive_accepts_esi_envelopes(db,format):
+    record=r2z2_record()
+    raw={'list':[record],'mapping':{'1':record},'single':record}[format]
+    c=client(lambda r:httpx.Response(200,json=raw))
+    assert c.backfill(1)==1
+    assert store.list_killmails()[0]['source']=='archive'
+    assert store.list_killmails()[0]['zkb']['totalValue']==123

@@ -57,11 +57,29 @@ class Collector:
     def normalize(raw):
         if not isinstance(raw, dict):
             raise ValueError('Invalid feed object')
-        if 'killmail' in raw:
-            if not isinstance(raw['killmail'], dict):
-                raise ValueError('Invalid wrapped killmail')
-            return dict(raw['killmail'], zkb=raw.get('zkb', raw['killmail'].get('zkb', {})))
-        return raw
+        # R2Z2 carries the full body under "esi"; retain support for older
+        # "killmail" envelopes and flat ESI-format archive entries.
+        wrappers = [key for key in ('esi', 'killmail') if key in raw]
+        if len(wrappers) > 1:
+            raise ValueError('Ambiguous feed object: multiple killmail bodies')
+        if not wrappers:
+            return raw
+        body = raw[wrappers[0]]
+        if not isinstance(body, dict):
+            raise ValueError('Invalid wrapped killmail')
+        payload = dict(body)
+        if 'killmail_id' in raw:
+            outer_id = raw['killmail_id']
+            if not isinstance(outer_id, int) or isinstance(outer_id, bool) or outer_id <= 0:
+                raise ValueError('Invalid envelope killmail ID')
+            if 'killmail_id' in body and body['killmail_id'] != outer_id:
+                raise ValueError('Envelope killmail ID does not match body')
+            payload.setdefault('killmail_id', outer_id)
+        payload['zkb'] = raw.get('zkb', body.get('zkb', {}))
+        for key in ('uploaded_at', 'sequence_id'):
+            if key in raw:
+                payload[key] = raw[key]
+        return payload
 
     def once(self):
         if store.get_state('data_mode') == 'demo':
@@ -80,8 +98,11 @@ class Collector:
                 store.set_state('collector_last_error', message)
                 raise FeedGap(message)
             return False
-        if 'sequence' in raw and int(raw['sequence']) != seq:
-            raise FeedGap(f'Response sequence mismatch at {seq}; cursor unchanged')
+        if not isinstance(raw, dict):
+            raise ValueError('Invalid feed object; cursor unchanged')
+        for key in ('sequence_id', 'sequence'):
+            if key in raw and (not isinstance(raw[key], int) or isinstance(raw[key], bool) or raw[key] != seq):
+                raise FeedGap(f'Response sequence mismatch at {seq}; cursor unchanged')
         payload = self.normalize(raw)
         store.ingest_killmail(payload)
         # A crash between insert and cursor update replays safely through unique killmail ID.
@@ -140,7 +161,7 @@ class Collector:
             if raw is None:
                 raise FeedGap(f'Archive missing for {day}; backfill incomplete')
             if isinstance(raw, dict):
-                if 'killmail_id' in raw or 'killmail' in raw:
+                if 'killmail_id' in raw or 'killmail' in raw or 'esi' in raw:
                     raw = [raw]
                 elif all(str(key).isdigit() for key in raw):
                     raw = list(raw.values())
