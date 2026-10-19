@@ -31,16 +31,16 @@ def test_cursor_survives_replay(db):
     assert len(store.list_killmails()) == 1
 
 
-def test_gap_does_not_skip(db):
+def test_temporary_gap_waits_without_skipping_or_crashing(db):
     store.set_state('r2z2_sequence', 10)
     def respond(request):
         return httpx.Response(200, json={'sequence': 99}) if request.url.path.endswith('sequence.json') else httpx.Response(404)
     delays = []
-    with pytest.raises(FeedGap):
-        client(respond, delays).once()
+    assert not client(respond, delays).once()
     assert 6 in delays
     assert store.get_state('r2z2_sequence') == 10
-    assert 'gap' in store.get_state('collector_last_error')
+    assert 'Retrying the same sequence' in store.get_state('collector_last_error')
+    assert store.get_state('collector_wait')['status']=='waiting_for_sequence'
 
 
 def test_poll_at_tip_does_not_advance(db):
@@ -194,3 +194,52 @@ def test_archive_accepts_esi_envelopes(db,format):
     assert c.backfill(1)==1
     assert store.list_killmails()[0]['source']=='archive'
     assert store.list_killmails()[0]['zkb']['totalValue']==123
+
+
+def test_missing_record_becomes_available_and_resumes_same_cursor(db):
+    store.set_state('r2z2_sequence',10)
+    calls=[]
+    def respond(req):
+        calls.append(req.url.path)
+        if req.url.path.endswith('sequence.json'): return httpx.Response(200,json={'sequence':20})
+        return httpx.Response(404) if len(calls)==1 else httpx.Response(200,json=r2z2_record())
+    c=client(respond)
+    assert c.once() is False
+    assert store.get_state('r2z2_sequence')==10
+    assert store.list_killmails()==[]
+    assert c.once() is True
+    assert calls==['/ephemeral/10.json','/ephemeral/sequence.json','/ephemeral/10.json']
+    assert store.get_state('r2z2_sequence')==11
+    assert store.get_state('collector_wait') is None
+    assert store.get_state('collector_last_error') is None
+    assert len(store.list_killmails())==1
+
+
+def test_gap_backoff_persists_across_collectors_and_is_bounded(db):
+    store.set_state('r2z2_sequence',10)
+    def respond(req):
+        return httpx.Response(200,json={'sequence':20}) if req.url.path.endswith('sequence.json') else httpx.Response(404)
+    first_seen=None
+    for expected in [6,12,24,48,60,60]:
+        delays=[]
+        assert client(respond,delays).once() is False
+        waiting=store.get_state('collector_wait')
+        assert waiting['retry_seconds']==expected
+        assert 6 in delays and max(delays)<=60
+        first_seen=first_seen or waiting['first_seen']
+        assert waiting['first_seen']==first_seen
+        assert store.get_state('r2z2_sequence')==10
+    assert store.list_killmails()==[]
+
+
+def test_caught_up_state_clears_obsolete_gap_warning(db):
+    store.set_state('r2z2_sequence',10)
+    store.set_state('collector_last_error','An old gap warning')
+    def respond(req):
+        return httpx.Response(200,json={'sequence':9}) if req.url.path.endswith('sequence.json') else httpx.Response(404)
+    delays=[]
+    assert client(respond,delays).once() is False
+    assert store.get_state('collector_last_error') is None
+    assert store.get_state('collector_wait')['status']=='caught_up'
+    assert store.get_state('collector_wait')['retry_seconds']==6
+    assert store.get_state('r2z2_sequence')==10

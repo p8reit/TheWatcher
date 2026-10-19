@@ -74,7 +74,7 @@ docker compose -p new-eden-live --profile live run --rm collector python -m app.
 
 This exits after importing; add `--follow` to keep polling. Maximum backfill: 90 days. Use `--refresh-archives` with `--backfill-days` to revisit completed archive days. Imports help descriptive analysis immediately, but their receipt times are **now**, so they cannot fabricate historical forecasting observations.
 
-A missing live sequence stalls collection instead of silently skipping data. After inspecting the logs, an explicit `--reset-to-current` skips the unavailable interval and saves an audit record. Stop the regular collector before resetting:
+A missing live sequence is retried without crashing or advancing the cursor. A pointer ahead of a 404 is not treated as proof of permanent loss. Polling waits at least six seconds, backs off to 60 seconds when the pointer is ahead, and resumes automatically when the exact record becomes available. `/api/status` reports the wait state, first detection, attempts and retry interval. An indefinitely missing/expired record still requires operator recovery; retries cannot reconstruct it. Only after confirming that recovery is necessary, an explicit `--reset-to-current` skips the unavailable interval and saves an audit record. Stop the regular collector before resetting:
 
 ```sh
 docker compose -p new-eden-live --profile live stop collector
