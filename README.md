@@ -114,10 +114,10 @@ The budget is a configurable **local inference** limit, independent of ChatGPT/C
 - Profiles count distinct killmail involvement and separate attacker/victim sides. Association means shared attacker participation, not common account ownership.
 - Fit patterns use exact fitted-module fingerprints of lost ships. They do not reconstruct attacker fits or confirm fleet doctrines.
 - Forecasts estimate at least one recorded PvP killmail in a system over the next 60 minutes. Expected kills is a separate historical hourly mean.
-- Training requires at least 21 days of first-seen history, plus label maturity and minimum sample/class checks. A chronological holdout must improve Brier score at least 2% over the per-system frequency baseline before the model is used. Otherwise the baseline remains active.
+- Live first-seen training requires at least 21 days of first-seen history, plus label maturity and minimum sample/class checks. A chronological holdout must improve Brier score at least 2% over the per-system frequency baseline before the model is used. Otherwise the baseline remains active.
 - Models remain experimental and uncalibrated. Holdout evaluation samples clock-hour origins; live estimates use a rolling horizon. Models expire after seven days and are retrained manually.
 - Reports, archives and collection gaps are incomplete. Silent hours are not proof of zero combat. Only observed systems are ranked.
-- Analytics cap each query at 50,000 records. Training refuses capped data. Configure a small `ANALYSIS_SYSTEM_IDS` scope for longer observation windows. Collection currently stores all events without automatic retention; monitor disk use.
+- Descriptive analytics cap each query at 50,000 records. Live first-seen training refuses capped data; historical archive training aggregates its selected systems directly in SQLite. Configure a small `ANALYSIS_SYSTEM_IDS` scope for longer observation windows. Collection currently stores all events without automatic retention; monitor disk use.
 - Evidence links are attached independently of the model; synthetic records never link to real killmails. The model can still misinterpret evidence, so inspect the underlying calculations.
 
 ## Development
@@ -167,3 +167,19 @@ Existing killmail history is discovered incrementally after upgrading. New killm
 Views use cached names and automatically refresh each minute. While the initial backlog resolves, they show `Resolving … name…`; unavailable names get an explicit label instead of an ID or invented identity. The sidebar reports pending names and lookup errors, also available in `/api/status` under `names`. Existing cached names remain visible during an outage. Dashboard requests queue missing references locally; they never call ESI directly. Large initial caches can take several minutes or longer to populate.
 
 Numeric IDs, exact fitting signatures and event/receipt timestamps remain intact in stored data, APIs and model training. Cards, search results and evidence links display readable labels; the explicit manual ID input is under **Advanced lookup by EVE ID**. Local model narration receives resolved labels with identifier fields stripped. Rebuild/recreate `web`, `collector` and `npc-collector` using your existing live Compose project to activate the update; no seed, volume deletion or retraining is required. Preserve your local port configuration.
+
+
+### Train immediately on historical killmail archives
+
+After importing 21–42 completed UTC days of zKill archives into the live project, open **Activity forecasts**, select **Historical killmail archives**, and click **Train & evaluate**. Alternatively:
+
+```sh
+curl -X POST 'http://127.0.0.1:8099/api/train?mode=historical&days=42' \
+  -H 'Content-Type: application/json' -d '{}'
+```
+
+Use your configured UI port. The historical window uses up to the requested number of most recent consecutive completed archive days, with a minimum of 21. Incomplete days and gaps are not treated as completed coverage. Seven days warm up lag features; the remaining clock hours split chronologically 75%/25%. Systems are selected only from the training portion (up to 12, restricted by `ANALYSIS_SYSTEM_IDS` when set). SQL aggregation avoids silently truncating large global imports to the display's 50,000 records. Existing sample/class checks and the 2% Brier improvement gate still apply. A `baseline_retained` result means training ran, but the model did not earn promotion.
+
+This is **retrospective event-time evaluation**: it assumes an archived killmail was available by its event time, since its actual historical publication delay is unknown. It does not demonstrate real-time prediction accuracy, current positions or online status. Archive completeness means a successful provider-file import, not a complete record of all combat in EVE. Numeric IDs and original event/receipt times are preserved. The artifact is stored separately from the live first-seen model.
+
+An accepted, unexpired live model takes precedence. Otherwise an accepted historical model can supply estimates explicitly labeled `Experimental historical model (retrospective)` with live accuracy unverified. Current historical-model features use actual received-by-now records across the full selected system scope. Both artifacts expire after seven days; the API exposes both under `/api/forecast` → `models`. `/api/train` without a mode continues to enforce the live first-seen gate. Demo datasets default to live/demo training. NPC count training still requires verified ESI snapshot history; zKill archives do not supply historical ratting counts.
