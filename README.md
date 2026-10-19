@@ -26,9 +26,25 @@ docker compose -p new-eden-demo run --rm web python -m app.demo
 docker compose -p new-eden-demo up -d web
 ```
 
-Open http://localhost:8088. The demo seed runs once on an empty database. Search `SYNTHETIC`, or load character ID `900001`. Explore fitting patterns and use **Train model** to exercise the chronological training pipeline. Demo metrics do not establish real predictive accuracy.
+Open http://localhost:8088 (or your configured `UI_PORT`). The demo seed runs once on an empty database. Search `SYNTHETIC`, or load character ID `900001`. Explore fitting patterns and use **Train model** to exercise the chronological training pipeline. Demo metrics do not establish real predictive accuracy.
 
 Stop with `docker compose -p new-eden-demo down`. Data persists in the named Docker volume. Stop the demo before starting live mode because both use port 8088.
+
+## Change the UI port
+
+Set `UI_PORT` in your existing `.env` file. For example:
+
+```dotenv
+UI_PORT=8099
+```
+
+Recreate the web container using the same Compose project name you used when starting it:
+
+```sh
+docker compose -p new-eden-demo up -d --force-recreate web
+```
+
+For live mode use `-p new-eden-live` instead. Open http://localhost:8099 for this example. Existing `.env` files without `UI_PORT` default to 8088. The mapping stays bound to host loopback; the internal web port and health check remain 8080. Changing the host port preserves the database; do not rerun the demo seed or remove volumes.
 
 ## Collect live data
 
