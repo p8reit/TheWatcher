@@ -88,14 +88,35 @@ class Collector:
             seq = self.pointer()
             store.set_state('r2z2_sequence', seq)
             store.set_state('collector_started_at', store.utcnow())
+        pending = store.get_state('collector_wait')
+        if pending and pending.get('sequence') == seq and pending.get('retry_at'):
+            retry_at = datetime.fromisoformat(pending['retry_at'])
+            remaining = (retry_at - datetime.now(timezone.utc)).total_seconds()
+            if remaining > 0:
+                self.sleep(min(60, remaining))
         raw = self.request('GET', f'{BASE}/ephemeral/{seq}.json')
         if raw is None:
+            # A pointer ahead of a missing object does not prove permanent loss:
+            # publication/cache propagation can briefly expose this ordering.
             self.sleep(6)
             latest = self.pointer()
+            previous = pending if pending and pending.get('sequence') == seq else {}
+            attempts = previous.get('attempts', 0) + 1
+            interval = min(60, 6 * 2 ** min(attempts - 1, 4)) if latest > seq else 6
+            now = datetime.now(timezone.utc)
+            waiting = {'status': 'waiting_for_sequence' if latest > seq else 'caught_up',
+                       'sequence': seq, 'pointer': latest, 'attempts': attempts,
+                       'first_seen': previous.get('first_seen', now.isoformat()),
+                       'last_checked': now.isoformat(), 'retry_seconds': interval,
+                       'retry_at': (now + timedelta(seconds=interval - 6)).isoformat()}
+            store.set_state('collector_wait', waiting)
+            message = (f'R2Z2 sequence {seq} currently unavailable (HTTP 404); pointer is {latest}. '
+                       f'Retrying the same sequence with a {interval}s polling interval; cursor retained.')
+            store.set_state('collector_last_error', message if latest > seq else None)
             if latest > seq:
-                message = f'R2Z2 gap at sequence {seq}; pointer is {latest}. Backfill required; cursor was not advanced.'
-                store.set_state('collector_last_error', message)
-                raise FeedGap(message)
+                print(message, flush=True)
+            if interval > 6:
+                self.sleep(interval - 6)
             return False
         if not isinstance(raw, dict):
             raise ValueError('Invalid feed object; cursor unchanged')
@@ -106,6 +127,7 @@ class Collector:
         store.ingest_killmail(payload)
         # A crash between insert and cursor update replays safely through unique killmail ID.
         store.set_state('r2z2_sequence', seq + 1)
+        store.set_state('collector_wait', None)
         store.set_state('collector_last_success', store.utcnow())
         store.set_state('collector_last_error', None)
         return True
@@ -129,6 +151,7 @@ class Collector:
         store.set_state('collector_last_manual_reset', gap)
         store.set_state('collector_gap_' + gap['reset_at'], gap)
         store.set_state('r2z2_sequence', current)
+        store.set_state('collector_wait', None)
         print(f'MANUAL RESET: next sequence {old} -> {current}; skipped interval '
               f"{gap['skipped_sequence_start']}..{gap['skipped_sequence_end']}. " + gap['warning'])
         return gap

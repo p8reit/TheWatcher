@@ -30,6 +30,7 @@ def limitations(rows):
 def collector_status():
     return {'enabled': os.getenv('COLLECTOR_ENABLED', 'false').lower() == 'true',
             'cursor': store.get_state('r2z2_sequence'),
+            'wait': store.get_state('collector_wait'),
             'last_error': store.get_state('collector_last_error'),
             'last_success': store.get_state('collector_last_success')}
 
