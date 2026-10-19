@@ -23,16 +23,16 @@ def model_status(mode="live"):
     m = store.get_state('activity_historical_model' if mode=="historical" else 'activity_model', {})
     return {k: m[k] for k in ('status', 'trained_at', 'metrics', 'message', 'training_mode') if k in m} or {'status': 'not_trained', 'metrics': {}}
 
-def train(now=None):
+def train(now=None, system_ids=None):
     from sklearn.pipeline import make_pipeline
     from sklearn.preprocessing import StandardScaler
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import brier_score_loss, log_loss
     import numpy as np
     now = now or datetime.now(timezone.utc)
-    raw = records(90)
+    raw = records(90, system_ids=system_ids)
     if len(raw) >= LIMIT:
-        raise ValueError('Training refused: the analysis record cap was reached. Configure ANALYSIS_SYSTEM_IDS to a smaller set of systems before training.')
+        raise ValueError('Training refused: the analysis record cap was reached. Select fewer systems in Activity forecasts or narrow ANALYSIS_SYSTEM_IDS before training.')
     rows = [k for k in raw if not k.get('zkb', {}).get('npc', False)]
     # Mature labels by one day. This does not guarantee all killmails were reported.
     end = hourly(now - timedelta(days=1))
@@ -45,6 +45,8 @@ def train(now=None):
     # Select systems using training-period observations only, never the holdout.
     counts = Counter(k['solar_system_id'] for k in rows if dt(k['observed_at']) < split and dt(k['killmail_time']) < split)
     selected = [s for s, _ in counts.most_common(12)]
+    if system_ids is not None and set(selected) != set(system_ids):
+        raise ValueError('Each selected system needs observations in the training period, before the holdout.')
     grouped = {s: [k for k in rows if k['solar_system_id'] == s] for s in selected}
     X, y, baseline, times = [], [], [], []
     for sid, kr in grouped.items():
@@ -66,7 +68,7 @@ def train(now=None):
     bp = np.asarray(baseline)[~mask]
     brier = float(brier_score_loss(y[~mask], pred)); base_brier = float(brier_score_loss(y[~mask], bp))
     accepted = brier < base_brier * 0.98
-    metrics = {'brier': round(brier,6), 'baseline_brier': round(base_brier,6),
+    metrics = {'system_ids': selected, 'llm_tokens': 0, 'brier': round(brier,6), 'baseline_brier': round(base_brier,6),
                'log_loss': round(float(log_loss(y[~mask], pred)),6), 'train_samples': int(mask.sum()),
                'test_samples': int((~mask).sum()), 'train_end': split.isoformat(), 'test_end': end.isoformat(),
                'target': 'At least one recorded PvP killmail in the next clock hour', 'promotion_rule': 'Holdout Brier at least 2% below system-frequency baseline'}

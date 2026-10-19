@@ -4,7 +4,6 @@ from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import json
 import math
-import os
 from . import store
 
 
@@ -34,7 +33,7 @@ def features(counts, cutoff):
             sum(counts.get(cutoff-timedelta(hours=i),0) for i in range(24,169,24))]
 
 
-def train(now=None, days=42):
+def train(now=None, days=42, system_ids=None):
     from sklearn.pipeline import make_pipeline
     from sklearn.preprocessing import StandardScaler
     from sklearn.linear_model import LogisticRegression
@@ -46,14 +45,15 @@ def train(now=None, days=42):
     first,end,archive_days = completed_window(now,days)
     start = first+timedelta(days=7) # real archive history warms up the seven-day features
     split = (start+(end-start)*.75).replace(minute=0,second=0,microsecond=0)
-    scope = sorted({int(x.strip()) for x in os.getenv('ANALYSIS_SYSTEM_IDS','').split(',') if x.strip()})
-    if any(i<=0 for i in scope): raise ValueError('ANALYSIS_SYSTEM_IDS must contain positive IDs.')
+    scope = store.analysis_scope(system_ids)
     scope_clause = " AND json_extract(raw,'$.solar_system_id') IN ("+','.join('?' for _ in scope)+')' if scope else ''
     base = " FROM killmails WHERE COALESCE(json_extract(raw,'$.zkb.npc'),0)=0 AND killmail_time>=? AND killmail_time<?"
     stamp = lambda d:d.strftime('%Y-%m-%dT%H:%M:%S')
     with closing(store.connect()) as c:
         selected = [r[0] for r in c.execute("SELECT json_extract(raw,'$.solar_system_id') AS sid"+base+scope_clause+
             ' GROUP BY sid ORDER BY COUNT(*) DESC,sid LIMIT 12',(stamp(start),stamp(split),*scope))]
+        if system_ids is not None and set(selected) != set(system_ids):
+            raise ValueError('Each selected system needs non-NPC killmails in the training portion of completed archives.')
         if not selected: raise ValueError('No non-NPC killmails in the training portion of the completed archives and selected scope.')
         # Aggregate all relevant killmails in SQLite instead of truncating the
         # global archive to the newest 50,000 individual records.
@@ -83,7 +83,7 @@ def train(now=None, days=42):
     baseline=float(brier_score_loss(y[~mask],np.asarray(baselines)[~mask]))
     accepted=brier<baseline*.98
     scaler,clf=pipe.steps[0][1],pipe.steps[1][1]
-    metrics={'brier':round(brier,6),'baseline_brier':round(baseline,6),
+    metrics={'system_ids': selected, 'llm_tokens': 0, 'brier':round(brier,6),'baseline_brier':round(baseline,6),
              'log_loss':round(float(log_loss(y[~mask],pred)),6),
              'train_samples':int(mask.sum()),'test_samples':int((~mask).sum()),
              'archive_days':archive_days,'archive_start':first.isoformat(),'train_end':split.isoformat(),'test_end':end.isoformat(),

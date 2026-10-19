@@ -112,9 +112,24 @@ def ingest_killmail(payload, source='r2z2', observed_at=None):
         return cur.rowcount == 1
 
 
-def list_killmails(days=30, limit=1000):
+def analysis_scope(system_ids=None):
+    """A request may narrow the configured scope, but cannot expand it."""
+    configured = {int(x.strip()) for x in os.getenv('ANALYSIS_SYSTEM_IDS', '').split(',') if x.strip()}
+    if any(s <= 0 for s in configured):
+        raise ValueError('ANALYSIS_SYSTEM_IDS must contain positive IDs.')
+    if system_ids is None:
+        return sorted(configured)
+    selected = set(system_ids)
+    if not selected or len(system_ids) > 12 or any(type(s) is not int or s <= 0 for s in selected):
+        raise ValueError('Select between 1 and 12 positive system IDs.')
+    if configured and not selected <= configured:
+        raise ValueError('Selected systems must be within ANALYSIS_SYSTEM_IDS.')
+    return sorted(selected)
+
+
+def list_killmails(days=30, limit=1000, system_ids=None):
     cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))).isoformat().replace('+00:00', 'Z')
-    scope = [int(x.strip()) for x in os.getenv('ANALYSIS_SYSTEM_IDS', '').split(',') if x.strip()]
+    scope = analysis_scope(system_ids)
     clause = ' AND json_extract(raw, \'$.solar_system_id\') IN (' + ','.join('?' for _ in scope) + ')' if scope else ''
     with closing(connect()) as conn:
         rows = conn.execute('SELECT * FROM killmails WHERE killmail_time>=?' + clause + ' ORDER BY killmail_time DESC,id DESC LIMIT ?',

@@ -10,7 +10,8 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
+from typing import Annotated
 from . import analytics, chat, predictor, store, npc_store, npc_predictor, system_activity, names, historical_predictor, battles
 
 @asynccontextmanager
@@ -89,10 +90,21 @@ def doctrines(days:int=Query(30,ge=1,le=365)): return analytics.doctrines(days)
 @app.get('/api/forecast')
 def forecast(days:int=Query(90,ge=1,le=90)): return predictor.forecast(days)
 
+class TrainingRequest(BaseModel):
+    system_ids: list[Annotated[StrictInt, Field(gt=0)]] | None = Field(default=None, min_length=1, max_length=12)
+
+
+@app.get('/api/training-scope')
+def training_scope(mode:str=Query("live",pattern="^(live|historical)$"), days:int=Query(42,ge=21,le=90)):
+    from .training import scope_preview
+    try: return scope_preview(mode, days)
+    except ValueError as e: raise HTTPException(400,str(e))
+
+
 @app.post('/api/train')
-def train(mode:str=Query("live",pattern="^(live|historical)$"),days:int=Query(42,ge=21,le=90)):
+def train(body:TrainingRequest = TrainingRequest(), mode:str=Query("live",pattern="^(live|historical)$"),days:int=Query(42,ge=21,le=90)):
     if not train_lock.acquire(blocking=False): raise HTTPException(409,'Training is already running.')
-    try: return historical_predictor.train(days=days) if mode=="historical" else predictor.train()
+    try: return historical_predictor.train(days=days, system_ids=body.system_ids) if mode=="historical" else predictor.train(system_ids=body.system_ids)
     except ValueError as e: raise HTTPException(400,str(e))
     finally: train_lock.release()
 

@@ -14,8 +14,8 @@ LIMITATIONS = [
 def dt(value):
     return datetime.fromisoformat(value.replace('Z', '+00:00')).astimezone(timezone.utc)
 
-def records(days=30):
-    return store.list_killmails(days=days, limit=LIMIT)
+def records(days=30, system_ids=None):
+    return store.list_killmails(days=days, limit=LIMIT, system_ids=system_ids)
 
 def name(entity_id, category="entity"):
     return store.entity_name(entity_id, category)
