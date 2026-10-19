@@ -159,3 +159,39 @@ def test_model_failure_keeps_budget_reservation(client, monkeypatch):
     with pytest.raises(httpx.HTTPStatusError):
         chat.answer('summarize')
     assert chat.llm_status()['tokens_used'] == chat.RESERVATION
+
+
+def test_overview_distinguishes_stored_matching_and_analyzed(client, monkeypatch):
+    monkeypatch.setattr(analytics, 'LIMIT', 2)
+    monkeypatch.setenv('ANALYSIS_SYSTEM_IDS', '30000142')
+    old = (datetime.now(timezone.utc)-timedelta(days=60)).isoformat()
+    for kid in range(1, 4):
+        store.ingest_killmail(kill(kid))
+    store.ingest_killmail(kill(4, solar_system_id=30000143))
+    store.ingest_killmail(kill(5, killmail_time=old))
+    data = client.get('/api/overview?days=7').json()
+    assert data['stored_kills'] == 5
+    assert data['total_kills'] == 3
+    assert data['analyzed_kills'] == 2
+    assert data['analysis_limit'] == 2
+    assert data['analysis_truncated'] is True
+    assert data['scope_filtered'] is True
+    assert data['total_value'] == 20000000
+    # At exactly the limit, every matching record is analyzed; do not claim truncation.
+    monkeypatch.setattr(analytics, 'LIMIT', 3)
+    data = client.get('/api/overview?days=7').json()
+    assert data['analysis_truncated'] is False
+    assert data['analyzed_kills'] == data['total_kills'] == 3
+
+
+def test_overview_receipt_time_includes_imports_outside_sample(client, monkeypatch):
+    monkeypatch.setattr(analytics, 'LIMIT', 1)
+    monkeypatch.delenv('ANALYSIS_SYSTEM_IDS', raising=False)
+    now = datetime.now(timezone.utc)
+    earlier = (now-timedelta(hours=2)).isoformat()
+    latest = now.isoformat()
+    store.ingest_killmail(kill(1), observed_at=earlier)
+    store.ingest_killmail(kill(2, killmail_time=(now-timedelta(days=2)).isoformat()), observed_at=latest)
+    data = client.get('/api/overview?days=7').json()
+    assert data['total_kills'] == 2 and data['analyzed_kills'] == 1
+    assert analytics.dt(data['last_observed_at']) == now

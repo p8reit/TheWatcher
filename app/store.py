@@ -122,6 +122,24 @@ def list_killmails(days=30, limit=1000):
     return [dict(json.loads(r['raw']), observed_at=r['observed_at'], source=r['source']) for r in rows]
 
 
+def overview_killmails(days=30, limit=50000):
+    """Count the complete window and read its bounded sample in one snapshot."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))).isoformat().replace('+00:00', 'Z')
+    scope = [int(x.strip()) for x in os.getenv('ANALYSIS_SYSTEM_IDS', '').split(',') if x.strip()]
+    clause = " AND json_extract(raw, '$.solar_system_id') IN (" + ','.join('?' for _ in scope) + ')' if scope else ''
+    where = ' WHERE killmail_time>=?' + clause
+    with closing(connect()) as conn:
+        conn.execute('BEGIN')
+        stored = conn.execute('SELECT COUNT(*) FROM killmails').fetchone()[0]
+        summary = conn.execute('SELECT COUNT(*) AS total, MAX(observed_at) AS last_received FROM killmails' + where,
+                               (cutoff, *scope)).fetchone()
+        rows = conn.execute('SELECT * FROM killmails' + where + ' ORDER BY killmail_time DESC,id DESC LIMIT ?',
+                            (cutoff, *scope, max(1, int(limit)))).fetchall()
+    return ([dict(json.loads(r['raw']), observed_at=r['observed_at'], source=r['source']) for r in rows],
+            {'stored_kills': stored, 'matching_kills': summary['total'], 'last_received': summary['last_received'],
+             'scope_filtered': bool(scope)})
+
+
 def killmail_names(payload):
     refs = {payload['solar_system_id']: 'system'}
     for actor in [payload['victim']] + payload.get('attackers', []):

@@ -35,7 +35,7 @@ def collector_status():
             'last_success': store.get_state('collector_last_success')}
 
 def overview(days=30):
-    rows = records(days)
+    rows, counts = store.overview_killmails(days=days, limit=LIMIT)
     systems, values, activity = Counter(), Counter(), Counter()
     pilots = set()
     for k in rows:
@@ -46,16 +46,19 @@ def overview(days=30):
         for p in [k['victim']] + k.get('attackers', []):
             if p.get('character_id'): pilots.add(p['character_id'])
     return {
-        'total_kills': len(rows), 'total_value': sum(values.values()),
+        'total_kills': counts['matching_kills'], 'stored_kills': counts['stored_kills'],
+        'analyzed_kills': len(rows), 'analysis_limit': LIMIT,
+        'analysis_truncated': counts['matching_kills'] > len(rows),
+        'scope_filtered': counts['scope_filtered'], 'total_value': sum(values.values()),
         'active_systems': len(systems), 'active_pilots': len(pilots),
-        'last_observed_at': max((k['observed_at'] for k in rows), default=None),
+        'last_observed_at': counts['last_received'],
         'data_mode': store.get_state('data_mode', store.get_state('npc_data_mode', 'empty')),
         'activity': [{'hour': h, 'kills': activity[h]} for h in range(24)],
         'systems': [{'id': s, 'name': name(s, "system"), 'kills': n, 'value': values[s]} for s, n in systems.most_common(20)],
         'recent': [dict(evidence(k), system_id=k['solar_system_id'], system_name=name(k['solar_system_id'], 'system'),
                         victim_ship=name(k['victim'].get('ship_type_id'), 'ship'), victim_name=name(k['victim'].get('character_id'), 'pilot'),
                         value=float(k.get('zkb', {}).get('totalValue', 0) or 0)) for k in rows[:30]],
-        'collector': collector_status(), 'limitations': limitations(rows),
+        'collector': collector_status(), 'limitations': LIMITATIONS + (['Value, systems, pilots, rankings and hourly activity use only the newest analyzed killmails.'] if counts['matching_kills'] > len(rows) else []),
     }
 
 def profile(kind, entity_id, days=30):
