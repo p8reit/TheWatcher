@@ -14,5 +14,5 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: pytest -q tests integrations/hunter/tests
       - run: node --check app/static/app.js
-      - run: cp .env.example .env && docker compose config --quiet
+      - run: cp .env.example .env && docker compose config --quiet && UI_PORT=8099 docker compose config --quiet
       - run: docker build -t new-eden-intel:test .
