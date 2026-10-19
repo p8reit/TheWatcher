@@ -3,6 +3,7 @@ from enum import Enum
 from pathlib import Path
 from urllib.parse import urlparse
 import os
+import asyncio
 import threading
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -10,13 +11,19 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
-from . import analytics, chat, predictor, store, npc_store, npc_predictor, system_activity
+from . import analytics, chat, predictor, store, npc_store, npc_predictor, system_activity, names
 
 @asynccontextmanager
 async def lifespan(app):
     store.init_db()
     npc_store.init_db()
-    yield
+    resolver = names.start() if names.enabled() else None
+    try:
+        yield
+    finally:
+        if resolver:
+            resolver[0].set()
+            await asyncio.to_thread(resolver[1].join, 15)
 
 app = FastAPI(title='New Eden Intel',version='0.2.0',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=os.getenv('ALLOWED_HOSTS','localhost,127.0.0.1,[::1],testserver').split(','))
@@ -60,7 +67,7 @@ def health(): return {'status':'ok'}
 @app.get('/api/status')
 def status():
     return {'data_mode':store.get_state('data_mode',store.get_state('npc_data_mode','empty')),'llm':chat.llm_status(),
-            'collector':analytics.collector_status(),'model':predictor.model_status()}
+            'collector':analytics.collector_status(),'model':predictor.model_status(),'names':names.status()}
 
 @app.get('/api/overview')
 def overview(days:int=Query(30,ge=1,le=365)): return analytics.overview(days)

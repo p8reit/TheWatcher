@@ -31,6 +31,10 @@ def init_db():
         CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS entities (id INTEGER PRIMARY KEY, name TEXT NOT NULL,
             category TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS name_queue (id INTEGER PRIMARY KEY, category TEXT NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt REAL NOT NULL DEFAULT 0, unavailable INTEGER NOT NULL DEFAULT 0);
+        CREATE INDEX IF NOT EXISTS names_due ON name_queue(next_attempt,priority);
         ''')
 
 
@@ -104,6 +108,7 @@ def ingest_killmail(payload, source='r2z2', observed_at=None):
         conn.execute("INSERT OR REPLACE INTO state VALUES ('data_mode',?)", (json.dumps(mode),))
         cur = conn.execute('INSERT OR IGNORE INTO killmails VALUES (?,?,?,?,?)',
                            (kid, event_text, received, source, json.dumps(payload)))
+        if source != 'demo': queue_names(conn, killmail_names(payload))
         return cur.rowcount == 1
 
 
@@ -117,10 +122,36 @@ def list_killmails(days=30, limit=1000):
     return [dict(json.loads(r['raw']), observed_at=r['observed_at'], source=r['source']) for r in rows]
 
 
-def entity_name(id):
-    with closing(connect()) as conn:
+def killmail_names(payload):
+    refs = {payload['solar_system_id']: 'system'}
+    for actor in [payload['victim']] + payload.get('attackers', []):
+        for field, category in [('character_id','pilot'),('corporation_id','corporation'),
+                                ('alliance_id','alliance'),('ship_type_id','ship'),('faction_id','faction')]:
+            if actor.get(field): refs[actor[field]] = category
+    def items(rows):
+        for item in rows:
+            refs[item['item_type_id']] = 'item'
+            items(item.get('items', []))
+    items(payload['victim'].get('items', []))
+    return refs
+
+
+def queue_names(conn, refs, priority=0):
+    conn.executemany('''INSERT INTO name_queue(id,category,priority,next_attempt)
+        VALUES (?,?,?,COALESCE((SELECT CAST(strftime('%s',updated_at) AS REAL)+2592000 FROM entities WHERE id=?),0))
+        ON CONFLICT(id) DO UPDATE SET priority=MAX(priority,excluded.priority),
+        category=CASE WHEN name_queue.category='entity' THEN excluded.category ELSE name_queue.category END''',
+        [(int(i), category, priority, int(i)) for i, category in refs.items()])
+
+
+def entity_name(id, category='entity'):
+    if not id: return 'Unknown ' + category
+    with closing(connect()) as conn, conn:
         row = conn.execute('SELECT name FROM entities WHERE id=?', (int(id),)).fetchone()
-        return row['name'] if row else f'ID {id}'
+        if row: return row['name']
+        queue_names(conn, {id:category}, priority=10)
+        pending = conn.execute('SELECT unavailable FROM name_queue WHERE id=?',(int(id),)).fetchone()
+        return category.capitalize() + ' name unavailable' if pending['unavailable'] else 'Resolving ' + category + ' name…'
 
 
 def cache_entities(items):

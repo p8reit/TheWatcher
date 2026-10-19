@@ -1,6 +1,5 @@
 """Opt-in R2Z2 collector. See https://zkillboard.com/api/docs/ ."""
 import argparse
-from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import os
 import time
@@ -112,21 +111,9 @@ class Collector:
         return True
 
     def enrich_names(self, limit=100):
-        ids = set()
-        for kill in store.list_killmails(days=365, limit=500):
-            ids.add(kill['solar_system_id'])
-            for actor in [kill['victim']] + kill['attackers']:
-                ids.update(actor[k] for k in ('character_id', 'corporation_id', 'alliance_id', 'ship_type_id') if actor.get(k))
-            ids.update(i['item_type_id'] for i in kill['victim'].get('items', []))
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat().replace('+00:00', 'Z')
-        with closing(store.connect()) as conn:
-            known = {r[0] for r in conn.execute('SELECT id FROM entities WHERE updated_at>=?', (cutoff,))}
-        pending = sorted(ids - known)[:limit]
-        if pending:
-            result = self.request('POST', 'https://esi.evetech.net/latest/universe/names/', json=pending)
-            if not isinstance(result, list):
-                raise ValueError('ESI names response unavailable')
-            store.cache_entities(result)
+        # Resolution belongs to the web worker; a names outage must never stop ingestion.
+        from .names import discover
+        discover()
 
     def reset_to_current(self):
         if store.get_state('data_mode') == 'demo':

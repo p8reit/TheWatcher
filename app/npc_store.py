@@ -78,6 +78,7 @@ def ingest_snapshot(source, source_end, observed_at, rows, quality='verified', m
         cursor = c.execute('INSERT INTO npc_batches(source,source_end,observed_at,quality,metadata) VALUES (?,?,?,?,?)',
                            (source,end_text,received_text,quality,json.dumps(metadata or {},allow_nan=False)))
         c.executemany('INSERT INTO npc_observations VALUES (?,?,?,?,?)',[(cursor.lastrowid,*r) for r in normalized])
+        if quality != 'synthetic': store.queue_names(c, {r[0]:'system' for r in normalized})
         c.execute("INSERT OR REPLACE INTO state VALUES ('npc_data_mode',?)",(json.dumps(wanted),))
     return True
 

@@ -53,7 +53,7 @@ def activity(hours=6, now=None):
     for sid in latest.keys() | counts.keys():
         r = latest.get(sid)
         age = max(0, (now-analytics.dt(r['source_end'])).total_seconds()) if r else None
-        items.append({'system_id':sid, 'system_name':names.get(sid, f'System {sid}'),
+        items.append({'system_id':sid, 'system_name':names.get(sid) or store.entity_name(sid, 'system'),
                       'npc_kills':r['npc_kills'] if r else None,
                       'ship_kills':r['ship_kills'] if r else None,
                       'pod_kills':r['pod_kills'] if r else None,
@@ -67,7 +67,7 @@ def activity(hours=6, now=None):
                       'reported_killmails':counts[sid]})
     items.sort(key=lambda r:(-r['reported_killmails'], -(r['ship_kills'] or 0), -(r['npc_kills'] or 0), r['system_id']))
     recent = [dict(analytics.evidence(k), system_id=k['solar_system_id'],
-                   system_name=names.get(k['solar_system_id'], f"System {k['solar_system_id']}"),
+                   system_name=names.get(k['solar_system_id']) or store.entity_name(k['solar_system_id'], 'system'),
                    source=k['source'], observed_at=k['observed_at']) for k in payloads[:30]]
     return {'data_mode':mode, 'hours':hours, 'window_start':cutoff.isoformat(), 'as_of':now.isoformat(),
             'items':items[:DISPLAY_LIMIT], 'total_systems':len(items), 'display_truncated':len(items)>DISPLAY_LIMIT,
