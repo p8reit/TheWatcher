@@ -1,7 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
-const state = {view:'overview', days:30, profile:null, generation:0, mode:null, activity:null, selectedSystems:new Map(), trainingPreview:null, trainingBusy:false, analystLocation:null, analystChoices:new Map(), locationGeneration:0};
-const titles = {battles:['Combat reports','Inspect observed engagements. Open the evidence. Build a battle report.'],'system-activity':['System activity','Reported ESI activity beside locally collected killmail evidence.'],npc:['NPC intelligence','Source-timestamped ratting activity and evaluated count forecasts.'],overview:['Operational overview','Understand the activity. Follow the evidence.'],profiles:['Entity intelligence','Observed patterns, recurring associates, and supporting evidence.'],doctrines:['Doctrine analysis','Discover recurring ship and fitting patterns in recorded losses.'],forecasts:['Activity forecasts','Measured expectations, grounded in historical observations.'],analyst:['Your intel analyst','Turn collected evidence into a useful briefing.']};
+const state = {view:'overview', days:30, profile:null, generation:0, mode:null, activity:null, selectedSystems:new Map(), trainingPreview:null, trainingBusy:false, analystLocation:null, analystChoices:new Map(), locationGeneration:0, lastRefreshAttempt:0};
+const titles = {battles:['Battle watch','Find fresh combat signals, inspect recent losses, and follow the evidence.'],'system-activity':['System activity','Reported ESI activity beside locally collected killmail evidence.'],npc:['NPC intelligence','Source-timestamped ratting activity and evaluated count forecasts.'],overview:['Operational overview','Understand the activity. Follow the evidence.'],profiles:['Entity intelligence','Observed patterns, recurring associates, and supporting evidence.'],doctrines:['Doctrine analysis','Discover recurring ship and fitting patterns in recorded losses.'],forecasts:['Activity forecasts','Measured expectations, grounded in historical observations.'],analyst:['Your intel analyst','Turn collected evidence into a useful briefing.']};
 function node(tag,text,cls){const el=document.createElement(tag);if(text!==undefined&&text!==null)el.textContent=String(text);if(cls)el.className=cls;return el;}
 function clear(id){const el=typeof id==='string'?$(id):id;el.replaceChildren();return el;}
 function number(value){return Number.isFinite(Number(value))&&value!==null&&value!==undefined?Number(value).toLocaleString(undefined,{maximumFractionDigits:0}):'—';}
@@ -117,30 +117,49 @@ function systemActivity(data){
  table('system-activity-recent',['Event (UTC)','First received (UTC)','System','Source','Evidence'],data.recent.map(k=>[date(k.time),date(k.observed_at),systemCell(k.system_id,k.system_name),k.source,evidenceLink(k)]));
  limitations('system-activity-limitations',data.limitations);
 }
+function age(seconds){
+ if(seconds===null||seconds===undefined||!Number.isFinite(Number(seconds)))return 'Unknown';
+ const value=Math.max(0,Math.floor(Number(seconds)));
+ if(value<60)return `${value}s`;
+ if(value<3600)return `${Math.floor(value/60)}m ${value%60}s`;
+ return `${Math.floor(value/3600)}h ${Math.floor(value%3600/60)}m`;
+}
+function spaceBadge(item){
+ const el=node('span',item.space_label||'Unknown space','badge space-badge space-'+(item.space_type||'unknown'));
+ el.title=item.security_status!=null?`Security status: ${Number(item.security_status).toFixed(4)}`:item.space_type==='wormhole'?'Wormhole space':'Security metadata is unavailable; background ESI lookups supply it.';
+ return el;
+}
 function battles(data){
- state.mode=data.data_mode;
- $('battle-summary').textContent=`${number(data.items?.length||0)} of ${number(data.total_windows||0)} observed combat groups · Last ${data.hours} hours · As of ${date(data.as_of)}`;
+ state.mode=data.data_mode;const fresh=data.mode==='fresh';
+ $('battle-freshness-control').hidden=!fresh;
+ $('battle-summary').textContent=`${number(data.items?.length||0)} of ${number(data.total_windows||0)} ${fresh?'fresh combat signals':'observed combat groups'} · ${fresh?`Events and reports within ${data.fresh_minutes} minutes`:`Last ${data.hours} hours`} · As of ${date(data.as_of)}`;
+ const collector=data.collector||{};
+ $('battle-feed-status').textContent=data.data_mode==='demo'?'SYNTHETIC DEMO · Fictional combat observations.':(collector.last_success?`Last recorded ingestion: ${date(collector.last_success)}.`:'No live ingestion heartbeat recorded. Fresh signals require incoming killmail reports.')+(collector.wait?' Feed is waiting for an unavailable sequence; observations may be delayed.':'')+(collector.last_error?' Feed error: '+collector.last_error:'');
  const root=clear('battle-results');
- if(!data.items?.length)empty(root,'No multi-kill engagements observed in this window. New reports appear as killmails arrive.');
+ if(!data.items?.length)empty(root,fresh?'No qualifying fresh PvP reports in this scope. Try a longer event age or another space filter; new signals appear as reports arrive.':'No multi-kill engagements observed in this history window.');
  (data.items||[]).forEach(b=>{
-  const card=node('article',null,'panel battle-card');
-  const top=node('div',null,'panel-heading');top.append(systemCell(b.system_id,b.system_name,b.synthetic),badge('Observed engagement'));card.append(top);
-  card.append(node('p',`${date(b.start)} → ${date(b.end)}`,'battle-meta'));
-  const m=node('div',null,'metrics battle-metrics');m.append(metric('Killmails',number(b.kills),'Locally observed'),metric('Pilots',number(b.observed_pilots),'Distinct participants'),metric('Reported value',isk(b.reported_value_isk),`${number(b.value_known_kills)} valued killmails`));card.append(m);
+  const card=node('article',null,'panel battle-card');card.dataset.signal=b.signal||'';card.dataset.space=b.space_type||'unknown';
+  const top=node('div',null,'panel-heading');const tags=node('div',null,'battle-tags');tags.append(spaceBadge(b),node('span',fresh?b.status_label:'Observed engagement','badge signal-'+(fresh?b.signal:'history')));top.append(systemCell(b.system_id,b.system_name,b.synthetic),tags);card.append(top);
+  card.append(node('p',`Recorded window: ${date(b.start)} → ${date(b.end)}`,'battle-meta'));
+  const timing=node('div',null,'battle-timing');timing.append(node('span',`First recorded loss ${age(b.first_event_age_seconds)} ago`),node('strong',`Latest loss ${age(b.latest_event_age_seconds)} ago`),node('span',`Latest report received ${age(b.latest_received_age_seconds)} ago`),node('span',`Latest loss report delay: ${age(b.report_delay_seconds)}`));card.append(timing);
+  const m=node('div',null,'metrics battle-metrics');m.append(metric('Recorded losses',number(b.kills),`${number(b.fresh_kills)} event + report within ${data.fresh_minutes}m`),metric('Observed pilots',number(b.observed_pilots),'Identified in this group'),metric('Reported value',isk(b.reported_value_isk),`${number(b.value_known_kills)} valued killmails`));card.append(m);
+  if(fresh&&b.signal==='early_signal')card.append(node('p','One loss is an early signal. More evidence is needed to establish a multi-kill engagement.','footnote'));
   const actions=node('div',null,'context-actions battle-actions');
   if(state.mode!=='demo'&&b.battle_report_url)actions.append(externalLink('Open WarBeacon report ↗',b.battle_report_url));
   if(state.mode!=='demo'&&b.eve_tools_url)actions.append(externalLink('Open EVE Tools report ↗',b.eve_tools_url));
+  if(fresh&&state.mode!=='demo'&&b.evidence?.[0]&&!b.synthetic){const latest=evidenceLink(b.evidence[0]);latest.textContent='Inspect latest loss ↗';latest.classList.add('context-link');actions.append(latest);}
   card.append(actions);
   const detail=node('details');detail.append(node('summary','Inspect losses & killmail evidence'));
-  const ships=node('div',null,'table-wrap');table(ships,['Lost ship','Losses'],(b.ships||[]).map(x=>[x.ship_name,number(x.losses)]));detail.append(ships);evidence(detail,b.evidence);if(b.kills>12)detail.append(node('p',`Showing up to 12 of ${number(b.kills)} locally observed killmails. External reports may include different evidence.`,'footnote'));card.append(detail);root.append(card);
+  const ships=node('div',null,'table-wrap');table(ships,['Lost ship','Losses'],(b.ships||[]).map(x=>[x.ship_name,number(x.losses)]));detail.append(ships);evidence(detail,b.evidence);if(b.kills>12)detail.append(node('p',`Showing up to 12 of ${number(b.kills)} locally observed killmails${fresh?', newest first':''}. External reports may include different evidence.`,'footnote'));card.append(detail);root.append(card);
  });
  limitations('battle-limitations',data.limitations);
 }
+
 function filteredSystems(items){
  const q=($('system-search')?.value||'').trim().toLowerCase(),sort=$('system-sort')?.value||'kills';
  return items.filter(i=>String(i.system_name).toLowerCase().includes(q)).sort((a,b)=>sort==='name'?a.system_name.localeCompare(b.system_name):sort==='npc'?(b.npc_kills??-1)-(a.npc_kills??-1):b.reported_killmails-a.reported_killmails);
 }
-async function load(){const generation=++state.generation;const view=state.view;$('refresh').disabled=true;error('');$(view).classList.add('loading');$(view).setAttribute('aria-busy','true');try{await status();let data;if(view==='battles')data=await api('/api/battles?hours='+($('battle-hours')?.value||24));else if(view==='system-activity')data=await api(`/api/system-activity?hours=${$('activity-hours').value}`);else if(view==='overview')data=await api(`/api/overview?days=${state.days}`);else if(view==='doctrines')data=await api(`/api/doctrines?days=${state.days}`);else if(view==='forecasts'){const [forecast,training]=await Promise.all([api('/api/forecast?days=90'),api('/api/training-scope?mode='+encodeURIComponent($('training-mode').value))]);data={...forecast,training};}else if(view==='npc')data={forecast:await api('/api/npc/forecast'),source:await api('/api/npc/status')};else if(view==='profiles'&&state.profile)data=await api(`/api/profile/${state.profile.kind}/${state.profile.id}?days=${state.days}`);if(generation!==state.generation)return;if(data)({battles,'system-activity':systemActivity,overview,doctrines,forecasts,profiles:profile,npc})[view](data);}catch(err){if(generation===state.generation)error(err.message);}finally{$(view).classList.remove('loading');$(view).setAttribute('aria-busy','false');if(generation===state.generation)$('refresh').disabled=false;}}
+async function load(){state.lastRefreshAttempt=Date.now();const generation=++state.generation;const view=state.view;$('refresh').disabled=true;error('');$(view).classList.add('loading');$(view).setAttribute('aria-busy','true');try{await status();let data;if(view==='battles')data=await api('/api/battles?'+new URLSearchParams({hours:$('battle-hours').value,mode:$('battle-mode').value,fresh_minutes:$('battle-fresh-minutes').value,...($('battle-space').value?{space:$('battle-space').value}:{})}));else if(view==='system-activity')data=await api(`/api/system-activity?hours=${$('activity-hours').value}`);else if(view==='overview')data=await api(`/api/overview?days=${state.days}`);else if(view==='doctrines')data=await api(`/api/doctrines?days=${state.days}`);else if(view==='forecasts'){const [forecast,training]=await Promise.all([api('/api/forecast?days=90'),api('/api/training-scope?mode='+encodeURIComponent($('training-mode').value))]);data={...forecast,training};}else if(view==='npc')data={forecast:await api('/api/npc/forecast'),source:await api('/api/npc/status')};else if(view==='profiles'&&state.profile)data=await api(`/api/profile/${state.profile.kind}/${state.profile.id}?days=${state.days}`);if(generation!==state.generation)return;if(data)({battles,'system-activity':systemActivity,overview,doctrines,forecasts,profiles:profile,npc})[view](data);}catch(err){if(generation===state.generation)error(err.message);}finally{$(view).classList.remove('loading');$(view).setAttribute('aria-busy','false');if(generation===state.generation)$('refresh').disabled=false;}}
 document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>{state.view=button.dataset.view;try{localStorage.setItem('watcher-view',state.view);}catch{}document.querySelectorAll('.view').forEach(v=>v.hidden=v.id!==state.view);document.querySelectorAll('[data-view]').forEach(b=>{b.classList.toggle('active',b===button);if(b===button)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});$('page-title').replaceChildren(document.createTextNode(titles[state.view][0]),node('span','.'));$('page-description').textContent=titles[state.view][1];$('breadcrumb-view').textContent=state.view.toUpperCase();$('analyst-profile').disabled=!state.profile||$('analyst-area').value!=='auto';analystScopeStatus();$('window-control').hidden=['analyst','forecasts','npc','system-activity','battles'].includes(state.view);load();}));
 $('refresh').addEventListener('click',load);$('days').addEventListener('change',()=>{state.days=Number($('days').value);load();});
 $('profile-form').addEventListener('submit',async event=>{event.preventDefault();const id=Number($('entity-id').value);if(!Number.isSafeInteger(id)||id<=0){error('Enter a valid positive EVE entity ID.');return;}state.profile={kind:$('entity-kind').value,id};await load();});
@@ -168,7 +187,7 @@ $('chat-form').addEventListener('submit',async event=>{event.preventDefault();co
  const data=await api('/api/chat',body);reply.replaceChildren(node('strong',`INTEL ANALYST · ${data.mode||'LOCAL'}`,'message-label'),document.createTextNode(data.answer));evidence(reply,data.evidence);await status();}catch(err){reply.replaceChildren(node('strong','REQUEST COULD NOT COMPLETE','message-label'),document.createTextNode(err.message));$('question').value=question;}finally{$('ask').disabled=false;conversation.scrollTop=conversation.scrollHeight;}});
 let rememberedView;try{rememberedView=localStorage.getItem('watcher-view');}catch{}
 const rememberedButton=Array.from(document.querySelectorAll('[data-view]')).find(b=>b.dataset.view===rememberedView);
-if(rememberedButton&&rememberedView!=='overview')rememberedButton.click();else load();setInterval(()=>{if(!document.hidden&&state.view!=='analyst'&&!$('refresh').disabled)load();},60000);
+if(rememberedButton&&rememberedView!=='overview')rememberedButton.click();else load();setInterval(()=>{const interval=state.view==='battles'&&$('battle-mode').value==='fresh'?15000:60000;if(!document.hidden&&state.view!=='analyst'&&!$('refresh').disabled&&Date.now()-state.lastRefreshAttempt>=interval)load();},1000);
 
 $('npc-train').addEventListener('click',async()=>{$('npc-train').disabled=true;$('npc-train-status').textContent='Evaluating NPC counts against chronological baselines…';try{const result=await api('/api/npc/train',{});$('npc-train-status').textContent=result.message||result.status;await load();}catch(e){$('npc-train-status').textContent=e.message;}finally{$('npc-train').disabled=false;}});
 
@@ -227,3 +246,6 @@ $('analyst-location').addEventListener('input',()=>{state.locationGeneration++;s
 $('analyst-hours').addEventListener('change',analystScopeStatus);
 
 $('analyst-profile').addEventListener('change',analystScopeStatus);
+
+for(const id of ['battle-mode','battle-fresh-minutes','battle-space'])$(id).addEventListener('change',load);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&state.view==='battles'&&$('battle-mode').value==='fresh'&&!$('refresh').disabled)load();});

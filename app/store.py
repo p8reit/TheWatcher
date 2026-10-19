@@ -45,6 +45,13 @@ def init_db():
             system_id INTEGER PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0,
             next_attempt REAL NOT NULL DEFAULT 0);
         CREATE INDEX IF NOT EXISTS geography_due ON geography_queue(next_attempt);
+        CREATE TABLE IF NOT EXISTS system_security (
+            system_id INTEGER PRIMARY KEY, security_status REAL NOT NULL, updated_at TEXT NOT NULL);
+        INSERT OR IGNORE INTO geography_queue(system_id)
+            SELECT system_id FROM geography_systems WHERE system_id NOT IN (SELECT system_id FROM system_security);
+        UPDATE geography_queue SET next_attempt=0
+            WHERE attempts=0 AND system_id IN (SELECT system_id FROM geography_systems
+                WHERE system_id NOT IN (SELECT system_id FROM system_security));
         ''')
 
 

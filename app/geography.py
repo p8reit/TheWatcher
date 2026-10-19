@@ -1,6 +1,7 @@
 """Background ESI geography cache and local-only location lookup."""
 from contextlib import closing
 import os
+import math
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import threading
@@ -36,6 +37,10 @@ def _valid_id(value):
     return type(value) is int and value > 0
 
 
+def _valid_security(value):
+    return type(value) in (int, float) and math.isfinite(value) and -1 <= value <= 1
+
+
 def _known_parents(constellation_id):
     """Return cached (constellation name, region ID, region name), if available."""
     with closing(store.connect()) as c:
@@ -63,7 +68,8 @@ class Resolver:
     def _resolve(self, system_id):
         system = self._request(f'{BASE_URL}/systems/{system_id}/')
         if (not isinstance(system, dict) or not _valid_id(system.get('system_id')) or system['system_id'] != system_id
-                or not isinstance(system.get('name'), str) or not system['name'].strip()):
+                or not isinstance(system.get('name'), str) or not system['name'].strip()
+                or not _valid_security(system.get('security_status'))):
             raise ValueError('Invalid ESI system response')
         constellation_id = system.get('constellation_id')
         if not _valid_id(constellation_id):
@@ -101,6 +107,8 @@ class Resolver:
                 VALUES (?,?,?,?,?,?,?)''',
                       (system_id, system['name'].strip(), constellation_id, constellation_name,
                        region_id, region_name, store.utcnow()))
+            c.execute('''INSERT OR REPLACE INTO system_security(system_id,security_status,updated_at)
+                VALUES (?,?,?)''', (system_id, float(system['security_status']), store.utcnow()))
             c.execute('UPDATE geography_queue SET attempts=0,next_attempt=? WHERE system_id=?',
                       (time.time() + 2592000, system_id))
 
@@ -173,6 +181,32 @@ def locations(query='', kind=None):
     values = [x for x in all_locations() if (kind is None or x['kind'] == kind)
               and (needle in x['name'].casefold() or needle in str(x['id']))]
     return sorted(values, key=lambda x: (x['name'].casefold(), x['kind'], x['id']))[:50]
+
+
+def space_details(system_id):
+    """Return locally cached security and its EVE space classification."""
+    try:
+        system_id = int(system_id)
+    except (TypeError, ValueError, OverflowError):
+        system_id = 0
+    security = None
+    with closing(store.connect()) as c:
+        row = c.execute('SELECT security_status FROM system_security WHERE system_id=?',
+                        (system_id,)).fetchone()
+    if row is not None and _valid_security(row['security_status']):
+        security = float(row['security_status'])
+
+    if 31000000 <= system_id < 32000000:
+        kind, label = 'wormhole', 'J Space (Wormhole)'
+    elif security is None:
+        kind, label = 'unknown', 'Unknown space'
+    elif security >= 0.45:
+        kind, label = 'highsec', 'High Sec'
+    elif security > 0:
+        kind, label = 'lowsec', 'Low Sec'
+    else:
+        kind, label = 'nullsec', 'Null Sec'
+    return {'security_status': security, 'space_type': kind, 'space_label': label}
 
 
 def status():

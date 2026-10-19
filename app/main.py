@@ -148,8 +148,10 @@ def system_activity_view(hours:int=Query(6)):
     except ValueError as e: raise HTTPException(400,str(e))
 
 @app.get('/api/battles')
-def battle_reports(hours:int=Query(24)):
-    try: return battles.recent(hours=hours)
+def battle_reports(hours:int=Query(24),mode:str=Query('history',pattern='^(history|fresh)$'),
+                   fresh_minutes:int=Query(5,ge=1,le=30),
+                   space:str | None=Query(None,pattern='^(highsec|lowsec|nullsec|wormhole|unknown)$')):
+    try: return battles.recent(hours=hours,mode=mode,fresh_minutes=fresh_minutes,space=space)
     except ValueError as e: raise HTTPException(400,str(e))
 
 @app.get('/api/npc/status')

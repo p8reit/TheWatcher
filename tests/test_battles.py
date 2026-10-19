@@ -112,3 +112,101 @@ def test_api_window_validation():
         assert response.json()['hours'] == 24
         assert client.get('/api/battles?hours=1').status_code == 400
         assert client.get('/api/battles?hours=invalid').status_code == 422
+
+
+def test_fresh_single_and_forming_signals_have_event_and_receipt_ages():
+    put(1, 1)
+    item = battles.recent(now=NOW, mode='fresh')['items'][0]
+    assert item['signal'] == 'early_signal'
+    assert item['status_label'] == 'One recent PvP loss'
+    assert item['fresh_kills'] == 1
+    assert item['latest_event_at'] == (NOW-timedelta(minutes=1)).isoformat()
+    assert item['latest_received_at'] == NOW.isoformat()
+    assert item['report_delay_seconds'] == 60
+    put(2, 2); put(3, 1)
+    item = battles.recent(now=NOW, mode='fresh')['items'][0]
+    assert item['kills'] == 3 and item['fresh_kills'] == 3
+    assert item['signal'] == 'forming'
+    assert 'ongoing' not in item['status_label'].lower()
+
+
+def test_fresh_keeps_old_cluster_as_recent_combat_but_rejects_stale_event_or_receipt():
+    put(1, 20); put(2, 19); put(3, 1)
+    item = battles.recent(now=NOW, mode='fresh')['items'][0]
+    assert item['kills'] == 3 and item['fresh_kills'] == 1
+    assert item['signal'] == 'recent_combat'
+    put(4, 10, receipt=NOW)
+    put(5, 9, receipt=NOW-timedelta(minutes=9))
+    assert battles.recent(now=NOW, mode='fresh')['total_fresh_signals'] == 1
+
+
+def test_fresh_sources_scope_and_space_filter_precede_display_limit(monkeypatch):
+    put(1, 2, sid=30000001, source='archive'); put(2, 1, sid=30000001, source='r2z2')
+    put(3, 2, sid=30000002); put(4, 1, sid=30000002)
+    monkeypatch.setattr(battles, 'DISPLAY_LIMIT', 1)
+    from app import geography
+    monkeypatch.setattr(geography, 'space_details', lambda sid: {
+        'security_status': .8 if sid == 30000002 else .4,
+        'space_type': 'highsec' if sid == 30000002 else 'lowsec',
+        'space_label': 'High Sec' if sid == 30000002 else 'Low Sec'})
+    result = battles.recent(now=NOW, mode='fresh', space='highsec')
+    assert result['total_fresh_signals'] == 1
+    assert result['total_windows'] == 1 and result['display_truncated'] is False
+    assert result['items'][0]['system_id'] == 30000002
+    assert result['items'][0]['space_label'] == 'High Sec'
+    assert result['sources'] == {'r2z2': 2}
+    monkeypatch.delenv('ANALYSIS_SYSTEM_IDS', raising=False)
+    monkeypatch.setenv('ANALYSIS_SYSTEM_IDS', '30000002')
+    assert battles.recent(now=NOW, mode='fresh')['scope'] == [30000002]
+    with pytest.raises(ValueError): battles.recent(now=NOW, mode='fresh', space='Jita')
+    with pytest.raises(ValueError): battles.recent(now=NOW, mode='other')
+
+
+def test_fresh_candidate_system_filter_precedes_analysis_cap(monkeypatch):
+    put(1, 100, sid=30000001); put(2, 99, sid=30000001); put(3, 98, sid=30000001)
+    put(4, 1, sid=30000002)
+    monkeypatch.setattr(battles, 'KILL_LIMIT', 1)
+    assert battles.recent(now=NOW, mode='fresh')['items'][0]['system_id'] == 30000002
+    with pytest.raises(ValueError, match='cap reached'):
+        battles.recent(now=NOW, mode='history')
+
+
+def test_report_delay_is_unknown_when_receipt_predates_event():
+    put(1, 2, receipt=NOW)
+    put(2, 1, receipt=NOW-timedelta(minutes=2))
+    row = battles.recent(now=NOW)['items'][0]
+    assert row['latest_received_at'] == NOW.isoformat()
+    assert row['report_delay_seconds'] is None
+
+
+def test_fresh_evidence_preview_starts_with_newest_events():
+    for kid, minute in enumerate(range(25, 0, -1), 1):
+        put(kid, minute)
+    item = battles.recent(now=NOW, mode='fresh')['items'][0]
+    assert item['evidence_truncated'] is True
+    assert item['evidence'][0]['killmail_id'] == 25
+    assert item['evidence'][0]['time'] == (NOW-timedelta(minutes=1)).isoformat()
+    assert item['evidence'][-1]['killmail_id'] == 6
+    history = battles.recent(now=NOW, mode='history')['items'][0]
+    assert history['evidence'][0]['killmail_id'] == 1
+
+
+def test_fresh_api_contract_and_filter_validation():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    now = datetime.now(timezone.utc)
+    store.ingest_killmail({'killmail_id': 9000, 'solar_system_id': 31999999,
+        'killmail_time': (now-timedelta(seconds=30)).isoformat(),
+        'victim': {'character_id': 900001, 'ship_type_id': 940001},
+        'attackers': [{'character_id': 900002}], 'zkb': {'npc': False}})
+    with TestClient(app) as client:
+        result = client.get('/api/battles?mode=fresh&fresh_minutes=5&space=wormhole&hours=6')
+        assert result.status_code == 200
+        data = result.json()
+        assert data['mode'] == 'fresh' and data['items'][0]['signal'] == 'early_signal'
+        assert data['items'][0]['space_type'] == 'wormhole'
+        assert data['items'][0]['space_label'] == 'J Space (Wormhole)'
+        assert client.get('/api/battles?mode=fresh&space=lowsec').json()['items'] == []
+        assert client.get('/api/battles').json()['mode'] == 'history'
+        for query in ('mode=invalid', 'fresh_minutes=0', 'fresh_minutes=31', 'space=invalid'):
+            assert client.get('/api/battles?'+query).status_code == 422
