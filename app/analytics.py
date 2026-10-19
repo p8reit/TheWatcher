@@ -17,8 +17,8 @@ def dt(value):
 def records(days=30):
     return store.list_killmails(days=days, limit=LIMIT)
 
-def name(entity_id):
-    return store.entity_name(entity_id) if entity_id else 'Unknown'
+def name(entity_id, category="entity"):
+    return store.entity_name(entity_id, category)
 
 def evidence(k):
     synthetic = k.get('source') == 'demo' or k.get('zkb', {}).get('synthetic', False)
@@ -50,9 +50,9 @@ def overview(days=30):
         'last_observed_at': max((k['observed_at'] for k in rows), default=None),
         'data_mode': store.get_state('data_mode', store.get_state('npc_data_mode', 'empty')),
         'activity': [{'hour': h, 'kills': activity[h]} for h in range(24)],
-        'systems': [{'id': s, 'name': name(s), 'kills': n, 'value': values[s]} for s, n in systems.most_common(20)],
-        'recent': [dict(evidence(k), system_id=k['solar_system_id'], system_name=name(k['solar_system_id']),
-                        victim_ship=name(k['victim'].get('ship_type_id')), victim_name=name(k['victim'].get('character_id')),
+        'systems': [{'id': s, 'name': name(s, "system"), 'kills': n, 'value': values[s]} for s, n in systems.most_common(20)],
+        'recent': [dict(evidence(k), system_id=k['solar_system_id'], system_name=name(k['solar_system_id'], 'system'),
+                        victim_ship=name(k['victim'].get('ship_type_id'), 'ship'), victim_name=name(k['victim'].get('character_id'), 'pilot'),
                         value=float(k.get('zkb', {}).get('totalValue', 0) or 0)) for k in rows[:30]],
         'collector': collector_status(), 'limitations': limitations(rows),
     }
@@ -82,11 +82,11 @@ def profile(kind, entity_id, days=30):
                 associates[cid] += 1
                 weights[cid] += 1 / max(1, fleet_size - 1)
         if len(links) < 30: links.append(evidence(k))
-    return {'id': entity_id, 'name': name(entity_id), 'kind': kind, 'kills': kills, 'losses': losses,
+    return {'id': entity_id, 'name': name(entity_id, "pilot" if kind=="character" else kind), 'kind': kind, 'kills': kills, 'losses': losses,
             'activity': [{'hour': h, 'kills': activity[h]} for h in range(24)],
-            'ships': [{'id': i, 'name': name(i), 'count': n} for i, n in ships.most_common(15)],
-            'systems': [{'id': i, 'name': name(i), 'count': n} for i, n in systems.most_common(15)],
-            'associates': [{'id': i, 'name': name(i), 'count': associates[i], 'weighted_score': round(w, 3)} for i, w in weights.most_common(15)],
+            'ships': [{'id': i, 'name': name(i, 'ship'), 'count': n} for i, n in ships.most_common(15)],
+            'systems': [{'id': i, 'name': name(i, 'system'), 'count': n} for i, n in systems.most_common(15)],
+            'associates': [{'id': i, 'name': name(i, 'pilot'), 'count': associates[i], 'weighted_score': round(w, 3)} for i, w in weights.most_common(15)],
             'evidence': links, 'limitations': limitations(rows) + ['Hours are UTC combat observations. Ship counts are participant appearances.', 'Associations are downweighted for large attacker groups; repeated kills in one battle are still correlated.']}
 
 def doctrines(days=30):
@@ -104,8 +104,8 @@ def doctrines(days=30):
         signature = '|'.join(f'{i}:{q}' for i, q in sorted(modules.items()))
         key = ship, signature
         if key not in groups:
-            groups[key] = {'ship_id': ship, 'ship_name': name(ship), 'signature': signature,
-                           'modules': [f'{name(i)} ×{q}' for i, q in sorted(modules.items())], 'losses': 0, 'evidence': []}
+            groups[key] = {'ship_id': ship, 'ship_name': name(ship, 'ship'), 'signature': signature,
+                           'modules': [f'{name(i, "item")} ×{q}' for i, q in sorted(modules.items())], 'losses': 0, 'evidence': []}
         g = groups[key]
         g['losses'] += 1
         if len(g['evidence']) < 5: g['evidence'].append(evidence(k))

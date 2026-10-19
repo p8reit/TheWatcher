@@ -103,7 +103,7 @@ def forecast(days=90, now=None):
             z = model['intercept'] + sum(c*(v-m)/s for c,v,m,s in zip(model['coef'],f,model['mean'],model['scale']))
             prob = 1/(1+math.exp(-max(-40,min(40,z))))
             method = 'Experimental logistic model'
-        items.append({'system_id': sid, 'system_name': name(sid), 'probability': round(prob,4),
+        items.append({'system_id': sid, 'system_name': name(sid, 'system'), 'probability': round(prob,4),
                       'expected_kills': round(len(closed)/elapsed,3), 'history_hours': elapsed,
                       'method': method, 'confidence': 'limited / uncalibrated', 'target_start': target.isoformat(),
                       'target_end': (target+timedelta(hours=1)).isoformat()})

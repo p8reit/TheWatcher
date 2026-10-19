@@ -193,7 +193,7 @@ def forecast(now=None):
             method = 'experimental_ridge'
         if not math.isfinite(estimate):
             raise ValueError('NPC forecast produced a non-finite estimate.')
-        items.append({'system_id': sid, 'system_name': store.entity_name(sid),
+        items.append({'system_id': sid, 'system_name': store.entity_name(sid, "system"),
                       'expected_npc_kills': round(estimate, 2), 'method': method,
                       'latest_npc_kills': latest['npc_kills'], 'source_end': latest['_end'].isoformat(),
                       'observed_at': latest['_received'].isoformat(), 'age_seconds': int(age.total_seconds()),
