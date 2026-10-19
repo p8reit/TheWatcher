@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
-from . import analytics, chat, predictor, store, npc_store, npc_predictor, system_activity, names
+from . import analytics, chat, predictor, store, npc_store, npc_predictor, system_activity, names, historical_predictor
 
 @asynccontextmanager
 async def lifespan(app):
@@ -90,9 +90,9 @@ def doctrines(days:int=Query(30,ge=1,le=365)): return analytics.doctrines(days)
 def forecast(days:int=Query(90,ge=1,le=90)): return predictor.forecast(days)
 
 @app.post('/api/train')
-def train():
+def train(mode:str=Query("live",pattern="^(live|historical)$"),days:int=Query(42,ge=21,le=90)):
     if not train_lock.acquire(blocking=False): raise HTTPException(409,'Training is already running.')
-    try: return predictor.train()
+    try: return historical_predictor.train(days=days) if mode=="historical" else predictor.train()
     except ValueError as e: raise HTTPException(400,str(e))
     finally: train_lock.release()
 

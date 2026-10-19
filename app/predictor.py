@@ -19,9 +19,9 @@ def features(rows, cutoff):
             count(1), count(6), count(24), count(168),
             sum(cutoff - timedelta(days=7) <= t and t.hour == cutoff.hour for t in known)]
 
-def model_status():
-    m = store.get_state('activity_model', {})
-    return {k: m[k] for k in ('status', 'trained_at', 'metrics', 'message') if k in m} or {'status': 'not_trained', 'metrics': {}}
+def model_status(mode="live"):
+    m = store.get_state('activity_historical_model' if mode=="historical" else 'activity_model', {})
+    return {k: m[k] for k in ('status', 'trained_at', 'metrics', 'message', 'training_mode') if k in m} or {'status': 'not_trained', 'metrics': {}}
 
 def train(now=None):
     from sklearn.pipeline import make_pipeline
@@ -75,9 +75,9 @@ def train(now=None):
               'metrics': metrics, 'message': 'Chronological holdout passed; experimental and uncalibrated.' if accepted else 'Model did not beat baseline by 2%; baseline remains active.',
               'mean': scaler.mean_.tolist(), 'scale': scaler.scale_.tolist(), 'coef': clf.coef_[0].tolist(),
               'intercept': float(clf.intercept_[0]), 'systems': selected, 'features': FEATURES,
-              'data_mode': store.get_state('data_mode', 'empty')}
+              'data_mode': store.get_state('data_mode', 'empty'), 'training_mode':'live'}
     store.set_state('activity_model', result)
-    return {k: result[k] for k in ('status','trained_at','metrics','message')}
+    return {k: result[k] for k in ('status','trained_at','metrics','message','training_mode')}
 
 def forecast(days=90, now=None):
     now = now or datetime.now(timezone.utc)
@@ -86,6 +86,17 @@ def forecast(days=90, now=None):
     bysystem = defaultdict(list)
     for k in rows: bysystem[k['solar_system_id']].append(k)
     model = store.get_state('activity_model', {})
+    historical = store.get_state('activity_historical_model', {})
+    def fresh(candidate):
+        return (candidate.get('status')=='experimental' and candidate.get('data_mode')==store.get_state('data_mode')
+                and timedelta(0)<=now-dt(candidate['trained_at'])<timedelta(days=7))
+    if not fresh(model) and fresh(historical): model = historical
+    summary_mode = 'historical' if model.get('training_mode')=='historical' else 'live'
+    if not model and historical: summary_mode='historical'
+    historical_features = {}
+    if model.get('training_mode')=='historical' and fresh(model):
+        from .historical_predictor import current_features
+        historical_features = current_features(model['systems'],now)
     items = []
     for sid, kr in bysystem.items():
         first = hourly(min(dt(k['killmail_time']) for k in kr))
@@ -94,22 +105,21 @@ def forecast(days=90, now=None):
         occupied = len({hourly(dt(k['killmail_time'])) for k in closed})
         prob = (occupied + 1) / (elapsed + 2)
         method = 'Historical frequency baseline'
-        usable = (model.get('status') == 'experimental' and sid in model.get('systems', [])
-                  and model.get('data_mode') == store.get_state('data_mode')
-                  and (now-dt(model['trained_at'])).days < 7)
+        usable = fresh(model) and sid in model.get('systems', [])
         if usable:
             # Rolling sixty-minute horizon; evaluation uses hourly origins.
-            f = features(kr, now)
+            f = historical_features[sid] if sid in historical_features else features(kr, now)
             z = model['intercept'] + sum(c*(v-m)/s for c,v,m,s in zip(model['coef'],f,model['mean'],model['scale']))
             prob = 1/(1+math.exp(-max(-40,min(40,z))))
-            method = 'Experimental logistic model'
+            method = 'Experimental historical model (retrospective)' if model.get('training_mode')=='historical' else 'Experimental logistic model'
         items.append({'system_id': sid, 'system_name': name(sid, 'system'), 'probability': round(prob,4),
                       'expected_kills': round(len(closed)/elapsed,3), 'history_hours': elapsed,
-                      'method': method, 'confidence': 'limited / uncalibrated', 'target_start': target.isoformat(),
+                      'method': method, 'confidence': 'retrospective / live accuracy unverified' if usable and model.get('training_mode')=='historical' else 'limited / uncalibrated', 'target_start': target.isoformat(),
                       'target_end': (target+timedelta(hours=1)).isoformat()})
-    return {'items': sorted(items,key=lambda x:x['probability'],reverse=True)[:30], 'model': model_status(),
+    return {'items': sorted(items,key=lambda x:x['probability'],reverse=True)[:30], 'model': model_status(summary_mode), 'models': {'live':model_status(), 'historical':model_status('historical')},
             'limitations': limitations(rows)+['Forecasts concern recorded PvP activity, not target availability or safe travel.',
             'Baseline assumes observed event span represents coverage; imports and missing reports bias it.',
             'Probability estimates are not calibrated guarantees. Expected kills is a separate historical hourly average.',
             'Predictions cover the next 60 minutes; holdout evaluation uses predictions at clock-hour boundaries.',
+            'Historical models assume past killmails were available by event time; their scores do not validate live prediction accuracy.',
             'Only already-observed systems are ranked. Models expire after 7 days; train manually to refresh.']}
