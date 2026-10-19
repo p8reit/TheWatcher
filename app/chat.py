@@ -6,7 +6,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 import httpx
-from . import analytics, predictor, store, npc_predictor
+from . import analytics, predictor, store, npc_predictor, analyst_activity
 
 CONTEXT_LIMIT = 8192
 OUTPUT_LIMIT = 768
@@ -55,10 +55,18 @@ def local_url():
     if not local: raise ValueError('Remote model endpoints are disabled. Use localhost, ollama, host.docker.internal, or a private IP.')
     return url
 
-def retrieve(question, kind=None, entity_id=None):
+def retrieve(question, kind=None, entity_id=None, location=None, hours=None):
+    if entity_id and location is None and hours is not None:
+        raise ValueError('Entity profile summaries use the last 30 days. Omit hours or select an area for a different window.')
     q = question.lower()
     evidence = []
-    if entity_id:
+    activity = None if entity_id and location is None else analyst_activity.retrieve(question, location=location, hours=hours)
+    if activity is not None:
+        context, evidence, summary = activity
+    elif location is not None:
+        context = {'needs_clarification': True}
+        summary = 'The area selector supports recorded combat activity questions. Ask who was active, which corporations or alliances appeared, or which ships were observed in this area.'
+    elif entity_id:
         context = analytics.profile(kind or 'character',entity_id)
         evidence = context['evidence'][:8]
         summary = f"{context['name']}: {context['kills']} recorded kills and {context['losses']} losses in the last 30 days."
@@ -106,9 +114,11 @@ def display_context(value):
     return value
 
 
-def answer(question, kind=None, entity_id=None):
-    context, evidence, summary = retrieve(question,kind,entity_id)
+def answer(question, kind=None, entity_id=None, location=None, hours=None):
+    context, evidence, summary = retrieve(question,kind,entity_id,location=location,hours=hours)
     cfg = llm_status()
+    if context.get('needs_clarification'):
+        return {'answer': summary, 'evidence': [], 'mode': 'retrieval', 'tokens_used': 0}
     if not cfg['enabled']:
         return {'answer': summary+'\n\nLocal model narration is disabled; this is a calculated data summary.', 'evidence': evidence, 'mode':'retrieval', 'tokens_used':0}
     base = local_url()

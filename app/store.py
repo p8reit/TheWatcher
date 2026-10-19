@@ -35,6 +35,16 @@ def init_db():
             priority INTEGER NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
             next_attempt REAL NOT NULL DEFAULT 0, unavailable INTEGER NOT NULL DEFAULT 0);
         CREATE INDEX IF NOT EXISTS names_due ON name_queue(next_attempt,priority);
+        CREATE TABLE IF NOT EXISTS geography_systems (
+            system_id INTEGER PRIMARY KEY, system_name TEXT NOT NULL,
+            constellation_id INTEGER NOT NULL, constellation_name TEXT NOT NULL,
+            region_id INTEGER NOT NULL, region_name TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS geography_region ON geography_systems(region_id);
+        CREATE INDEX IF NOT EXISTS geography_constellation ON geography_systems(constellation_id);
+        CREATE TABLE IF NOT EXISTS geography_queue (
+            system_id INTEGER PRIMARY KEY, attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt REAL NOT NULL DEFAULT 0);
+        CREATE INDEX IF NOT EXISTS geography_due ON geography_queue(next_attempt);
         ''')
 
 
@@ -175,6 +185,8 @@ def queue_names(conn, refs, priority=0):
         ON CONFLICT(id) DO UPDATE SET priority=MAX(priority,excluded.priority),
         category=CASE WHEN name_queue.category='entity' THEN excluded.category ELSE name_queue.category END''',
         [(int(i), category, priority, int(i)) for i, category in refs.items()])
+    conn.executemany('INSERT OR IGNORE INTO geography_queue(system_id) VALUES (?)',
+                     [(int(i),) for i, category in refs.items() if category in ('system', 'solar_system')])
 
 
 def entity_name(id, category='entity'):

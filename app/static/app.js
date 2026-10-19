@@ -1,6 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
-const state = {view:'overview', days:30, profile:null, generation:0, mode:null, activity:null, selectedSystems:new Map(), trainingPreview:null, trainingBusy:false};
+const state = {view:'overview', days:30, profile:null, generation:0, mode:null, activity:null, selectedSystems:new Map(), trainingPreview:null, trainingBusy:false, analystLocation:null, analystChoices:new Map(), locationGeneration:0};
 const titles = {battles:['Combat reports','Inspect observed engagements. Open the evidence. Build a battle report.'],'system-activity':['System activity','Reported ESI activity beside locally collected killmail evidence.'],npc:['NPC intelligence','Source-timestamped ratting activity and evaluated count forecasts.'],overview:['Operational overview','Understand the activity. Follow the evidence.'],profiles:['Entity intelligence','Observed patterns, recurring associates, and supporting evidence.'],doctrines:['Doctrine analysis','Discover recurring ship and fitting patterns in recorded losses.'],forecasts:['Activity forecasts','Measured expectations, grounded in historical observations.'],analyst:['Your intel analyst','Turn collected evidence into a useful briefing.']};
 function node(tag,text,cls){const el=document.createElement(tag);if(text!==undefined&&text!==null)el.textContent=String(text);if(cls)el.className=cls;return el;}
 function clear(id){const el=typeof id==='string'?$(id):id;el.replaceChildren();return el;}
@@ -57,8 +57,9 @@ function externalLink(label,url,description){const a=node('a',label,'context-lin
 function resolvedName(name){return typeof name==='string'&&name.length>0&&!/^(resolving|unknown|unresolved)|name unavailable$/i.test(name);}
 function systemCell(id,name,synthetic=false){
  const root=node('div',null,'system-cell');root.append(node('strong',name||'Resolving system name…'));
- if(state.mode==='demo'||synthetic)return root;
- const actions=node('div',null,'context-actions');
+ const ask=node('button','Ask analyst','copy-action');ask.type='button';ask.setAttribute('aria-label',`Ask analyst about ${name||'this system'}`);ask.addEventListener('click',()=>openSystemAnalyst(id,name));
+ if(state.mode==='demo'||synthetic){root.append(ask);return root;}
+ const actions=node('div',null,'context-actions');actions.append(ask);
  if(Number.isSafeInteger(Number(id))&&Number(id)>0)actions.append(externalLink('zKill ↗',`https://zkillboard.com/system/${Number(id)}/`,`Open ${name||'system'} on zKillboard`));
  if(resolvedName(name)){
   actions.append(externalLink('Dotlan ↗','https://evemaps.dotlan.net/system/'+encodeURIComponent(name.replaceAll(' ','_')),`Open ${name} on Dotlan`));
@@ -140,7 +141,7 @@ function filteredSystems(items){
  return items.filter(i=>String(i.system_name).toLowerCase().includes(q)).sort((a,b)=>sort==='name'?a.system_name.localeCompare(b.system_name):sort==='npc'?(b.npc_kills??-1)-(a.npc_kills??-1):b.reported_killmails-a.reported_killmails);
 }
 async function load(){const generation=++state.generation;const view=state.view;$('refresh').disabled=true;error('');$(view).classList.add('loading');$(view).setAttribute('aria-busy','true');try{await status();let data;if(view==='battles')data=await api('/api/battles?hours='+($('battle-hours')?.value||24));else if(view==='system-activity')data=await api(`/api/system-activity?hours=${$('activity-hours').value}`);else if(view==='overview')data=await api(`/api/overview?days=${state.days}`);else if(view==='doctrines')data=await api(`/api/doctrines?days=${state.days}`);else if(view==='forecasts'){const [forecast,training]=await Promise.all([api('/api/forecast?days=90'),api('/api/training-scope?mode='+encodeURIComponent($('training-mode').value))]);data={...forecast,training};}else if(view==='npc')data={forecast:await api('/api/npc/forecast'),source:await api('/api/npc/status')};else if(view==='profiles'&&state.profile)data=await api(`/api/profile/${state.profile.kind}/${state.profile.id}?days=${state.days}`);if(generation!==state.generation)return;if(data)({battles,'system-activity':systemActivity,overview,doctrines,forecasts,profiles:profile,npc})[view](data);}catch(err){if(generation===state.generation)error(err.message);}finally{$(view).classList.remove('loading');$(view).setAttribute('aria-busy','false');if(generation===state.generation)$('refresh').disabled=false;}}
-document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>{state.view=button.dataset.view;try{localStorage.setItem('watcher-view',state.view);}catch{}document.querySelectorAll('.view').forEach(v=>v.hidden=v.id!==state.view);document.querySelectorAll('[data-view]').forEach(b=>{b.classList.toggle('active',b===button);if(b===button)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});$('page-title').replaceChildren(document.createTextNode(titles[state.view][0]),node('span','.'));$('page-description').textContent=titles[state.view][1];$('breadcrumb-view').textContent=state.view.toUpperCase();$('window-control').hidden=['analyst','forecasts','npc','system-activity','battles'].includes(state.view);load();}));
+document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>{state.view=button.dataset.view;try{localStorage.setItem('watcher-view',state.view);}catch{}document.querySelectorAll('.view').forEach(v=>v.hidden=v.id!==state.view);document.querySelectorAll('[data-view]').forEach(b=>{b.classList.toggle('active',b===button);if(b===button)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});$('page-title').replaceChildren(document.createTextNode(titles[state.view][0]),node('span','.'));$('page-description').textContent=titles[state.view][1];$('breadcrumb-view').textContent=state.view.toUpperCase();$('analyst-profile').disabled=!state.profile||$('analyst-area').value!=='auto';analystScopeStatus();$('window-control').hidden=['analyst','forecasts','npc','system-activity','battles'].includes(state.view);load();}));
 $('refresh').addEventListener('click',load);$('days').addEventListener('change',()=>{state.days=Number($('days').value);load();});
 $('profile-form').addEventListener('submit',async event=>{event.preventDefault();const id=Number($('entity-id').value);if(!Number.isSafeInteger(id)||id<=0){error('Enter a valid positive EVE entity ID.');return;}state.profile={kind:$('entity-kind').value,id};await load();});
 $('search-form').addEventListener('submit',async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;empty('search-results','Searching cached entities…');try{const data=await api('/api/entities?q='+encodeURIComponent($('entity-search').value.trim()));const results=clear('search-results');if(!data.items?.length)empty(results,'No cached names match. You can still enter an entity ID directly.');(data.items||[]).forEach(item=>{const kind=String(item.category||'').replace(/s$/,'');if(!['character','corporation','alliance'].includes(kind))return;const b=node('button',`${item.name} · ${kind}`,'search-hit');b.type='button';b.addEventListener('click',()=>{$('entity-kind').value=kind;$('entity-id').value=item.id;$('profile-form').requestSubmit();});results.append(b);});}catch(err){empty('search-results',err.message);}finally{button.disabled=false;}});
@@ -156,7 +157,15 @@ $('training-mode').addEventListener('change',()=>{state.trainingPreview=null;tra
 $('clear-training').addEventListener('click',()=>{state.selectedSystems.clear();document.querySelectorAll('#forecast-results input').forEach(el=>el.checked=false);document.querySelector('#forecast-results table')?.dispatchEvent(new Event('change'));trainingSummary();});
 
 document.querySelectorAll('[data-question]').forEach(b=>b.addEventListener('click',()=>{$('question').value=b.dataset.question;$('question').focus();}));
-$('chat-form').addEventListener('submit',async event=>{event.preventDefault();const question=$('question').value.trim();if(!question)return;const conversation=$('conversation');conversation.querySelector('.empty')?.remove();const user=node('div',null,'message user');user.append(node('strong','YOU','message-label'),document.createTextNode(question));conversation.append(user);const reply=node('div',null,'message');reply.append(node('strong','INTEL ANALYST','message-label'),node('span','Examining the available evidence…'));conversation.append(reply);$('ask').disabled=true;$('question').value='';try{const body={question};if(state.profile){body.entity_kind=state.profile.kind;body.entity_id=state.profile.id;}const data=await api('/api/chat',body);reply.replaceChildren(node('strong',`INTEL ANALYST · ${data.mode||'LOCAL'}`,'message-label'),document.createTextNode(data.answer));evidence(reply,data.evidence);await status();}catch(err){reply.replaceChildren(node('strong','REQUEST COULD NOT COMPLETE','message-label'),document.createTextNode(err.message));$('question').value=question;}finally{$('ask').disabled=false;conversation.scrollTop=conversation.scrollHeight;}});
+$('chat-form').addEventListener('submit',async event=>{event.preventDefault();const question=$('question').value.trim();if(!question)return;const conversation=$('conversation');conversation.querySelector('.empty')?.remove();const user=node('div',null,'message user');user.append(node('strong','YOU','message-label'),document.createTextNode(question));conversation.append(user);const reply=node('div',null,'message');reply.append(node('strong','INTEL ANALYST','message-label'),node('span','Examining the available evidence…'));conversation.append(reply);$('ask').disabled=true;$('question').value='';try{const body={question};
+ if($('analyst-area').value!=='auto'){
+  let location=state.analystLocation;
+  if(!location){await lookupAnalystLocations();location=matchAnalystLocation();}
+  if(!location)throw new Error('Choose a matching location from the local suggestions, or switch Area to From question.');
+  body.location={kind:location.kind,id:location.id};
+ }else if(state.profile&&$('analyst-profile').checked){body.entity_kind=state.profile.kind;body.entity_id=state.profile.id;}
+ if(!$('analyst-hours').disabled&&$('analyst-hours').value)body.hours=Number($('analyst-hours').value);
+ const data=await api('/api/chat',body);reply.replaceChildren(node('strong',`INTEL ANALYST · ${data.mode||'LOCAL'}`,'message-label'),document.createTextNode(data.answer));evidence(reply,data.evidence);await status();}catch(err){reply.replaceChildren(node('strong','REQUEST COULD NOT COMPLETE','message-label'),document.createTextNode(err.message));$('question').value=question;}finally{$('ask').disabled=false;conversation.scrollTop=conversation.scrollHeight;}});
 let rememberedView;try{rememberedView=localStorage.getItem('watcher-view');}catch{}
 const rememberedButton=Array.from(document.querySelectorAll('[data-view]')).find(b=>b.dataset.view===rememberedView);
 if(rememberedButton&&rememberedView!=='overview')rememberedButton.click();else load();setInterval(()=>{if(!document.hidden&&state.view!=='analyst'&&!$('refresh').disabled)load();},60000);
@@ -168,3 +177,53 @@ $('activity-hours').addEventListener('change',load);
 $('system-search')?.addEventListener('input',()=>{if(state.activity)systemActivity(state.activity);});
 $('system-sort')?.addEventListener('change',()=>{if(state.activity)systemActivity(state.activity);});
 $('battle-hours')?.addEventListener('change',load);
+
+function analystScopeStatus(){
+ const profileSelected=$('analyst-profile').checked&&!$('analyst-profile').disabled;
+ $('analyst-hours').disabled=profileSelected;
+ if(profileSelected){$('analyst-scope-status').textContent='Using the loaded entity profile over the last 30 days. Uncheck profile context to ask about an area and choose another time window.';return;}
+ const location=state.analystLocation;
+ const window=$('analyst-hours').selectedOptions[0].textContent;
+ $('analyst-scope-status').textContent=(location?`${location.kind}: ${location.name}. `:$('analyst-area').value==='auto'?'Area comes from your question. ':'Choose a matching cached location. ')+`Evidence window: ${window}. Region and constellation results cover mapped systems only.`;
+}
+function matchAnalystLocation(){
+ const value=$('analyst-location').value.trim();
+ const exact=state.analystChoices.get(value);
+ if(exact)return exact;
+ const matches=[...state.analystChoices.values()].filter(item=>item.name.toLocaleLowerCase()===value.toLocaleLowerCase());
+ return matches.length===1?matches[0]:null;
+}
+async function lookupAnalystLocations(){
+ const kind=$('analyst-area').value;
+ if(kind==='auto')return;
+ const generation=++state.locationGeneration;
+ const text=$('analyst-location').value.trim();
+ // A selected datalist label includes an ID only to disambiguate equal names.
+ const query=state.analystLocation&&text===state.analystLocation.label?state.analystLocation.name:text;
+ try{
+  const data=await api('/api/analyst/locations?kind='+encodeURIComponent(kind)+'&q='+encodeURIComponent(query.slice(0,100)));
+  if(generation!==state.locationGeneration||kind!==$('analyst-area').value)return;
+  state.analystChoices=new Map();const options=clear('analyst-location-options');
+  for(const item of data.items){const label=`${item.name} · ${item.id}`;state.analystChoices.set(label,{...item,label});const option=node('option');option.value=label;options.append(option);}
+  state.analystLocation=matchAnalystLocation();analystScopeStatus();
+  if(!data.items.length)$('analyst-scope-status').textContent='No matching cached '+kind+' names. Try a different name or ask about a named system. Geography choices appear as background lookups complete.';
+ }catch(err){if(generation===state.locationGeneration)$('analyst-scope-status').textContent=err.message;}
+}
+function openSystemAnalyst(id,name){
+ $('analyst-area').value='system';$('analyst-location').disabled=false;
+ const location={kind:'system',id:Number(id),name:name||'System name unavailable',label:`${name||'System name unavailable'} · ${id}`};
+ state.locationGeneration++;state.analystLocation=location;state.analystChoices=new Map([[location.label,location]]);$('analyst-location').value=location.label;
+ $('analyst-profile').checked=false;$('analyst-profile').disabled=true;
+ $('question').value='Who has recorded combat activity in this system?';
+ document.querySelector('[data-view="analyst"]').click();analystScopeStatus();$('question').focus();
+}
+let analystSearchTimer;
+$('analyst-area').addEventListener('change',()=>{
+ state.locationGeneration++;state.analystLocation=null;state.analystChoices.clear();$('analyst-location').value='';clear('analyst-location-options');
+ const automatic=$('analyst-area').value==='auto';$('analyst-location').disabled=automatic;$('analyst-location').placeholder=automatic?'Name an area in your question':'Search cached '+$('analyst-area').value+' names…';
+ $('analyst-profile').checked=false;$('analyst-profile').disabled=!automatic||!state.profile;analystScopeStatus();if(!automatic)lookupAnalystLocations();
+});
+$('analyst-location').addEventListener('input',()=>{state.locationGeneration++;state.analystLocation=matchAnalystLocation();analystScopeStatus();clearTimeout(analystSearchTimer);analystSearchTimer=setTimeout(lookupAnalystLocations,200);});
+$('analyst-hours').addEventListener('change',analystScopeStatus);
+
+$('analyst-profile').addEventListener('change',analystScopeStatus);

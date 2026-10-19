@@ -12,19 +12,25 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field, StrictInt
 from typing import Annotated
-from . import analytics, chat, predictor, store, npc_store, npc_predictor, system_activity, names, historical_predictor, battles
+from . import analytics, chat, predictor, store, npc_store, npc_predictor, system_activity, names, historical_predictor, battles, geography
 
 @asynccontextmanager
 async def lifespan(app):
     store.init_db()
     npc_store.init_db()
+    if store.get_state('data_mode') == 'demo':
+        from .demo import ensure_geography
+        ensure_geography()
     resolver = names.start() if names.enabled() else None
+    geography_resolver = geography.start() if geography.enabled() else None
     try:
         yield
     finally:
-        if resolver:
-            resolver[0].set()
-            await asyncio.to_thread(resolver[1].join, 15)
+        workers = [w for w in (resolver, geography_resolver) if w]
+        for stop, _ in workers:
+            stop.set()
+        for _, thread in workers:
+            await asyncio.to_thread(thread.join, 15)
 
 app = FastAPI(title='New Eden Intel',version='0.2.0',lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=os.getenv('ALLOWED_HOSTS','localhost,127.0.0.1,[::1],testserver').split(','))
@@ -57,10 +63,23 @@ class Kind(str,Enum):
     corporation='corporation'
     alliance='alliance'
 
+class LocationKind(str, Enum):
+    system = 'system'
+    constellation = 'constellation'
+    region = 'region'
+
+
+class AnalystLocation(BaseModel):
+    kind: LocationKind
+    id: StrictInt = Field(gt=0)
+
+
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1,max_length=2000)
     entity_kind: Kind | None = None
     entity_id: int | None = Field(default=None,gt=0)
+    location: AnalystLocation | None = None
+    hours: StrictInt | None = Field(default=None, ge=1, le=2160)
 
 @app.get('/api/health')
 def health(): return {'status':'ok'}
@@ -68,7 +87,7 @@ def health(): return {'status':'ok'}
 @app.get('/api/status')
 def status():
     return {'data_mode':store.get_state('data_mode',store.get_state('npc_data_mode','empty')),'llm':chat.llm_status(),
-            'collector':analytics.collector_status(),'model':predictor.model_status(),'names':names.status()}
+            'collector':analytics.collector_status(),'model':predictor.model_status(),'names':names.status(),'geography':geography.status()}
 
 @app.get('/api/overview')
 def overview(days:int=Query(30,ge=1,le=365)): return analytics.overview(days)
@@ -108,10 +127,16 @@ def train(body:TrainingRequest = TrainingRequest(), mode:str=Query("live",patter
     except ValueError as e: raise HTTPException(400,str(e))
     finally: train_lock.release()
 
+@app.get('/api/analyst/locations')
+def analyst_locations(q:str=Query('',max_length=100),kind:LocationKind | None=None):
+    return {'items': geography.locations(q, kind.value if kind else None), 'geography': geography.status()}
+
+
 @app.post('/api/chat')
 def analyst(body:ChatRequest):
     if not chat_lock.acquire(blocking=False): raise HTTPException(429,'Analyst is busy. One local generation runs at a time.')
-    try: return chat.answer(body.question, body.entity_kind.value if body.entity_kind else None,body.entity_id)
+    try: return chat.answer(body.question, body.entity_kind.value if body.entity_kind else None,body.entity_id,
+                            location=body.location.model_dump(mode='json') if body.location else None, hours=body.hours)
     except chat.BudgetExceeded as e: raise HTTPException(429,str(e))
     except ValueError as e: raise HTTPException(400,str(e))
     except httpx.HTTPError: raise HTTPException(503,'Ollama is unavailable or rejected the request. Check its address, model, and server logs. No cloud fallback was attempted.')

@@ -168,6 +168,16 @@ Views use cached names and automatically refresh each minute. While the initial 
 
 Numeric IDs, exact fitting signatures and event/receipt timestamps remain intact in stored data, APIs and model training. Cards, search results and evidence links display readable labels; the explicit manual ID input is under **Advanced lookup by EVE ID**. Local model narration receives resolved labels with identifier fields stripped. Rebuild/recreate `web`, `collector` and `npc-collector` using your existing live Compose project to activate the update; no seed, volume deletion or retraining is required. Preserve your local port configuration.
 
+### Ask analyst by location
+
+The analyst area accepts a question with a **System**, **Constellation**, or **Region** selection, or **From question** to use a location named in the question. For example: “What combat was observed in Jita over the last 24 hours?” or “Summarize activity in The Forge over the last 7 days.” The default window is 24 hours; supported windows are 1–2160 hours. Selecting a cached location can also come from the contextual **Ask analyst** actions. Profile context is included only when **Use the loaded entity profile** is explicitly checked.
+
+Answers summarize local killmail evidence: recorded pilot, corporation, alliance and ship involvement. Killmails are partial combat observations. They do not show whether a character is online or establish a current position. Missing location data is reported as unavailable; region and constellation answers state that they cover mapped systems only. Demo mode uses synthetic seeded geography and evidence.
+
+Named location parsing uses the local geography cache and consumes zero LLM tokens. The background geography resolver uses public ESI and requires `esi.evetech.net` to be reachable, plus the existing contact-bearing `USER_AGENT` and `NAME_RESOLVER_ENABLED=true`. `GEOGRAPHY_RESOLVER_ENABLED` defaults to `true`; set it to `false` to disable background geography refreshes. Cached reads never fetch ESI per question. Unresolved known system IDs remain selectable by ID while their names are unavailable.
+
+The local endpoints are `GET /api/analyst/locations?q=&kind=` for cached choices and `POST /api/chat` for a question, optionally with `location: {"kind":"system|constellation|region","id":123}` and integer `hours` from 1 to 2160. A location omitted from the request can be parsed from the question when it matches the local cache.
+
 
 ### Train immediately on historical killmail archives
 

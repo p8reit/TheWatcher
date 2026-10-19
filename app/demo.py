@@ -45,7 +45,23 @@ def seed(now=None):
                        'zkb': {'totalValue': rng.randrange(10, 800) * 1000000, 'npc': False, 'synthetic': True}}
             observed = (when + timedelta(minutes=5)).isoformat().replace('+00:00', 'Z')
             store.ingest_killmail(payload, source='demo', observed_at=observed)
+    ensure_geography(now)
     return count
+
+
+def ensure_geography(now=None):
+    """Add fictional topology to existing standard demos without reseeding events."""
+    if store.get_state('data_mode') != 'demo':
+        return
+    now = now or datetime.now(timezone.utc)
+    with closing(store.connect()) as conn, conn:
+        for i in range(4):
+            label = f'SYNTHETIC System {i+1}'
+            if not conn.execute('SELECT 1 FROM entities WHERE id=? AND name=?', (930001+i, label)).fetchone():
+                continue
+            conn.execute('INSERT OR IGNORE INTO geography_systems VALUES (?,?,?,?,?,?,?)',
+                (930001+i, label, 970001+i//2, f'SYNTHETIC Constellation {i//2+1}',
+                 960001+i//2, f'SYNTHETIC Region {i//2+1}', now.isoformat()))
 
 
 if __name__ == '__main__':
