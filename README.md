@@ -93,11 +93,13 @@ In `.env`:
 ```dotenv
 LLM_ENABLED=true
 OLLAMA_URL=http://host.docker.internal:11434
-OLLAMA_MODEL=qwen3.5:9b
+OLLAMA_MODEL=qwen3:4b
 LLM_DAILY_TOKEN_BUDGET=50000
 ```
 
-Use the exact installed model tag shown by `ollama list`. No model is pulled by this app. A 9B model's performance depends on quantization, VRAM and other GPU usage; use a smaller installed model if necessary. With narration disabled, the analyst returns calculated summaries without using model tokens.
+Use the exact installed model tag shown by `ollama list`. No model is pulled by this app. `qwen3:4b` is a smaller starting point for a 12 GB GPU, though memory use still depends on quantization, context and other GPU activity. With narration disabled, the analyst returns calculated summaries without using model tokens.
+
+An optional bounded tool-using analyst and a separate QLoRA training recipe are described in [Local LLM training and evaluation](docs/LOCAL_LLM.md). Both require explicit setup. The **Train & evaluate** buttons under activity forecasts and NPC intelligence train separate statistical models and consume 0 LLM tokens.
 
 The Ollama server must be reachable from Docker. A host server listening only on `127.0.0.1` may not accept container traffic, especially on Linux. Configure an appropriate private Docker-facing bind address and firewall; keep port 11434 off public networks. For a native Python run, use `OLLAMA_URL=http://127.0.0.1:11434`.
 
@@ -146,7 +148,7 @@ Source: [p8reit/TheWatcher](https://github.com/p8reit/TheWatcher). Internal Pyth
 
 Automated coverage includes API/assets, data validation, deduplication, cursor and archive handling, rate limits, demo/live separation, profile/fit semantics, observation-time leakage, chronological demo training, and local model budget behavior. See `docs/VALIDATION.md` for the release check results.
 
-Next work: validate live collection on the target machine; add collection-coverage intervals and scoped retention; collect enough real history; evaluate calibration and seasonal baselines; improve fit clustering and natural-language entity lookup. This release does not fine-tune an LLM.
+Next work: validate live collection on the target machine; add collection-coverage intervals and scoped retention; collect enough real history; evaluate calibration and seasonal baselines; improve fit clustering and natural-language entity lookup. Optional LLM fine-tuning is an offline operator workflow and has not been validated on the target GPU.
 
 Independent project; not affiliated with CCP Games or zKillboard. EVE Online and related marks belong to CCP. Source code and provider data have separate rights; no license to redistribute third-party data is implied.
 

@@ -1,0 +1,20 @@
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/hf-cache \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    TOKENIZERS_PARALLELISM=false \
+    OMP_NUM_THREADS=4 \
+    OPENBLAS_NUM_THREADS=4
+
+WORKDIR /workspace
+COPY requirements-training.txt .
+RUN python -m pip install --no-cache-dir -r requirements-training.txt \
+    && mkdir -p /hf-cache /workspace/data/llm \
+    && chown -R 1000:1000 /hf-cache /workspace
+COPY --chown=1000:1000 llm_training ./llm_training
+
+USER 1000:1000
+CMD ["python", "-m", "llm_training.train", "--help"]

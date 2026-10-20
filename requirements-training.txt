@@ -1,0 +1,9 @@
+# torch 2.6.0 and CUDA 12.4 are supplied by Dockerfile.training's pinned base image.
+transformers==4.51.3
+peft==0.15.2
+accelerate==1.6.0
+bitsandbytes==0.45.5
+huggingface_hub==0.30.2
+safetensors==0.5.3
+sentencepiece==0.2.0
+protobuf==4.25.3

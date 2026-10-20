@@ -17,7 +17,8 @@ class BudgetExceeded(ValueError): pass
 def llm_status():
     day = datetime.now(timezone.utc).date().isoformat()
     return {'enabled': os.getenv('LLM_ENABLED','false').lower() == 'true',
-            'model': os.getenv('OLLAMA_MODEL','qwen3.5:9b'),
+            'model': os.getenv('OLLAMA_MODEL','qwen3:4b'),
+            'agent_enabled': os.getenv('LLM_AGENT_ENABLED','false').lower() == 'true',
             'daily_budget': max(0,int(os.getenv('LLM_DAILY_TOKEN_BUDGET','50000'))),
             'tokens_used': store.get_state(f'llm_tokens:{day}',0)}
 
@@ -109,7 +110,7 @@ def display_context(value):
     """Narration sees resolved labels, while storage/training retain numeric keys."""
     if isinstance(value, dict):
         return {k:display_context(v) for k,v in value.items()
-                if k not in ('id','signature','cursor','scope','url') and not k.endswith('_id')}
+                if k not in ('id','signature','cursor','scope','url') and not k.endswith(('_id','_url'))}
     if isinstance(value, list): return [display_context(v) for v in value]
     return value
 
@@ -121,6 +122,9 @@ def answer(question, kind=None, entity_id=None, location=None, hours=None):
         return {'answer': summary, 'evidence': [], 'mode': 'retrieval', 'tokens_used': 0}
     if not cfg['enabled']:
         return {'answer': summary+'\n\nLocal model narration is disabled; this is a calculated data summary.', 'evidence': evidence, 'mode':'retrieval', 'tokens_used':0}
+    if cfg['agent_enabled'] and not (entity_id and location is None):
+        from . import agent
+        return agent.answer(question, context, evidence, summary, location=location, hours=hours)
     base = local_url()
     model = cfg['model']
     if 'cloud' in model.lower(): raise ValueError('Cloud model tags are disabled; configure a downloaded local Ollama model.')

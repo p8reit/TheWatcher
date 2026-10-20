@@ -1,0 +1,28 @@
+name: watcher-llm-training
+
+services:
+  trainer:
+    build:
+      context: .
+      dockerfile: Dockerfile.training
+    image: watcher-llm-trainer:torch2.6-cu124
+    environment:
+      HF_HOME: /hf-cache
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      TOKENIZERS_PARALLELISM: "false"
+      OMP_NUM_THREADS: "4"
+      OPENBLAS_NUM_THREADS: "4"
+    volumes:
+      - ./data/llm:/workspace/data/llm
+      - hf-cache:/hf-cache
+    shm_size: 2gb
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  hf-cache:

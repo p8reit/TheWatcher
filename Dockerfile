@@ -4,6 +4,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && useradd --create-home --uid 10001 intel && mkdir /data && chown intel:intel /data
 COPY --chown=intel:intel app ./app
+COPY --chown=intel:intel llm_training ./llm_training
 USER intel
 ENV DATABASE_PATH=/data/intel.db
 EXPOSE 8080
