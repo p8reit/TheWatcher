@@ -135,22 +135,30 @@ function battles(data){
  $('battle-summary').textContent=`${number(data.items?.length||0)} of ${number(data.total_windows||0)} ${fresh?'fresh combat signals':'observed combat groups'} · ${fresh?`Events and reports within ${data.fresh_minutes} minutes`:`Last ${data.hours} hours`} · As of ${date(data.as_of)}`;
  const collector=data.collector||{};
  $('battle-feed-status').textContent=data.data_mode==='demo'?'SYNTHETIC DEMO · Fictional combat observations.':(collector.last_success?`Last recorded ingestion: ${date(collector.last_success)}.`:'No live ingestion heartbeat recorded. Fresh signals require incoming killmail reports.')+(collector.wait?' Feed is waiting for an unavailable sequence; observations may be delayed.':'')+(collector.last_error?' Feed error: '+collector.last_error:'');
+ const expanded=new Set([...$('battle-results').querySelectorAll('details[open]')].map(el=>el.dataset.key));
  const root=clear('battle-results');
  if(!data.items?.length)empty(root,fresh?'No qualifying fresh PvP reports in this scope. Try a longer event age or another space filter; new signals appear as reports arrive.':'No multi-kill engagements observed in this history window.');
  (data.items||[]).forEach(b=>{
-  const card=node('article',null,'panel battle-card');card.dataset.signal=b.signal||'';card.dataset.space=b.space_type||'unknown';
-  const top=node('div',null,'panel-heading');const tags=node('div',null,'battle-tags');tags.append(spaceBadge(b),node('span',fresh?b.status_label:'Observed engagement','badge signal-'+(fresh?b.signal:'history')));top.append(systemCell(b.system_id,b.system_name,b.synthetic),tags);card.append(top);
-  card.append(node('p',`Recorded window: ${date(b.start)} → ${date(b.end)}`,'battle-meta'));
-  const timing=node('div',null,'battle-timing');timing.append(node('span',`First recorded loss ${age(b.first_event_age_seconds)} ago`),node('strong',`Latest loss ${age(b.latest_event_age_seconds)} ago`),node('span',`Latest report received ${age(b.latest_received_age_seconds)} ago`),node('span',`Latest loss report delay: ${age(b.report_delay_seconds)}`));card.append(timing);
-  const m=node('div',null,'metrics battle-metrics');m.append(metric('Recorded losses',number(b.kills),`${number(b.fresh_kills)} event + report within ${data.fresh_minutes}m`),metric('Observed pilots',number(b.observed_pilots),'Identified in this group'),metric('Reported value',isk(b.reported_value_isk),`${number(b.value_known_kills)} valued killmails`));card.append(m);
-  if(fresh&&b.signal==='early_signal')card.append(node('p','One loss is an early signal. More evidence is needed to establish a multi-kill engagement.','footnote'));
-  const actions=node('div',null,'context-actions battle-actions');
-  if(state.mode!=='demo'&&b.battle_report_url)actions.append(externalLink('Open WarBeacon report ↗',b.battle_report_url));
-  if(state.mode!=='demo'&&b.eve_tools_url)actions.append(externalLink('Open EVE Tools report ↗',b.eve_tools_url));
-  if(fresh&&state.mode!=='demo'&&b.evidence?.[0]&&!b.synthetic){const latest=evidenceLink(b.evidence[0]);latest.textContent='Inspect latest loss ↗';latest.classList.add('context-link');actions.append(latest);}
-  card.append(actions);
-  const detail=node('details');detail.append(node('summary','Inspect losses & killmail evidence'));
-  const ships=node('div',null,'table-wrap');table(ships,['Lost ship','Losses'],(b.ships||[]).map(x=>[x.ship_name,number(x.losses)]));detail.append(ships);evidence(detail,b.evidence);if(b.kills>12)detail.append(node('p',`Showing up to 12 of ${number(b.kills)} locally observed killmails${fresh?', newest first':''}. External reports may include different evidence.`,'footnote'));card.append(detail);root.append(card);
+  const row=node('article',null,'panel battle-row');row.dataset.signal=b.signal||'';row.dataset.space=b.space_type||'unknown';
+  const main=node('div',null,'battle-row-main');
+  const identity=node('div',null,'battle-row-identity');identity.append(node('strong',b.system_name||'System name unavailable'));
+  const tags=node('div',null,'battle-tags');tags.append(spaceBadge(b),node('span',fresh?b.status_label:'Observed engagement','badge signal-'+(fresh?b.signal:'history')));identity.append(tags);main.append(identity);
+  const timing=node('div',null,'battle-row-timing');timing.append(node('strong',`Latest loss ${age(b.latest_event_age_seconds)} ago`),node('span',`Received ${age(b.latest_received_age_seconds)} ago`));main.append(timing);
+  const stats=node('dl',null,'battle-row-stats');
+  for(const [label,value,title] of [['Losses',number(b.kills),`${number(b.fresh_kills)} event + report within ${data.fresh_minutes}m`],['Pilots',number(b.observed_pilots),'Identified in this group'],['Value',isk(b.reported_value_isk),`${number(b.value_known_kills)} valued killmails`]]){
+   const item=node('div');item.title=title;item.append(node('dt',label),node('dd',value));stats.append(item);
+  }
+  main.append(stats);
+  const actions=node('div',null,'context-actions battle-row-actions');
+  if(state.mode!=='demo'&&b.battle_report_url)actions.append(externalLink('WarBeacon ↗',b.battle_report_url));
+  if(state.mode!=='demo'&&b.eve_tools_url)actions.append(externalLink('EVE Tools ↗',b.eve_tools_url));
+  if(fresh&&state.mode!=='demo'&&b.evidence?.[0]&&!b.synthetic){const latest=evidenceLink(b.evidence[0]);latest.textContent='Latest loss ↗';latest.classList.add('context-link');actions.append(latest);}
+  const ask=node('button','Ask analyst','copy-action');ask.type='button';ask.setAttribute('aria-label',`Ask analyst about ${b.system_name||'this system'}`);ask.addEventListener('click',()=>openSystemAnalyst(b.system_id,b.system_name));actions.append(ask);main.append(actions);row.append(main);
+  const detail=node('details',null,'battle-row-details');detail.dataset.key=`${b.system_id}:${b.start}`;detail.open=expanded.has(detail.dataset.key);detail.append(node('summary','Details & evidence'));
+  const facts=node('div',null,'battle-row-facts');facts.append(node('span',`Recorded window: ${date(b.start)} → ${date(b.end)}`),node('span',`First recorded loss ${age(b.first_event_age_seconds)} ago`),node('span',`Latest loss report delay: ${age(b.report_delay_seconds)}`));detail.append(facts);
+  if(fresh&&b.signal==='early_signal')detail.append(node('p','One loss is an early signal. More evidence is needed to establish a multi-kill engagement.','footnote'));
+  if(state.mode!=='demo'&&!b.synthetic){const links=systemCell(b.system_id,b.system_name);links.querySelector('button[aria-label^="Ask analyst"]')?.remove();detail.append(links);}
+  const ships=node('div',null,'table-wrap');table(ships,['Lost ship','Losses'],(b.ships||[]).map(x=>[x.ship_name,number(x.losses)]));detail.append(ships);evidence(detail,b.evidence);if(b.kills>12)detail.append(node('p',`Showing up to 12 of ${number(b.kills)} locally observed killmails${fresh?', newest first':''}. External reports may include different evidence.`,'footnote'));row.append(detail);root.append(row);
  });
  limitations('battle-limitations',data.limitations);
 }
