@@ -10,9 +10,9 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from pydantic import BaseModel, Field, StrictInt
+from pydantic import BaseModel, Field, StrictInt, StrictBool
 from typing import Annotated
-from . import analytics, chat, predictor, store, npc_store, npc_predictor, system_activity, names, historical_predictor, battles, geography
+from . import analytics, chat, predictor, store, npc_store, npc_predictor, npc_scope, system_activity, names, historical_predictor, battles, geography
 
 @asynccontextmanager
 async def lifespan(app):
@@ -157,15 +157,34 @@ def battle_reports(hours:int=Query(24),mode:str=Query('history',pattern='^(histo
 @app.get('/api/npc/status')
 def npc_status(): return npc_store.status()
 
+@app.get('/api/npc/training-scope')
+def npc_training_scope():
+    try: return npc_scope.preview()
+    except ValueError as e: raise HTTPException(400,str(e))
+
+
+class NpcTrainingRequest(BaseModel):
+    system_ids: list[Annotated[StrictInt, Field(gt=0)]] | None = Field(default=None, min_length=1, max_length=24)
+    auto_select: StrictBool = False
+
+
+def _npc_query_ids(value: str | None):
+    if value is None: return None
+    parts = value.split(',')
+    if not 1 <= len(parts) <= 24 or any(not p.isdecimal() for p in parts):
+        raise ValueError('system_ids must be 1 to 24 comma-separated positive system IDs.')
+    return [int(p) for p in parts]
+
+
 @app.get('/api/npc/forecast')
-def npc_forecast():
-    try: return npc_predictor.forecast()
+def npc_forecast(system_ids: str | None=Query(None,max_length=512), auto_select: bool=False):
+    try: return npc_predictor.forecast(system_ids=_npc_query_ids(system_ids),auto_select=auto_select)
     except ValueError as e: raise HTTPException(400,str(e))
 
 @app.post('/api/npc/train')
-def npc_train():
+def npc_train(body: NpcTrainingRequest = NpcTrainingRequest()):
     if not npc_train_lock.acquire(blocking=False): raise HTTPException(409,'NPC training is already running.')
-    try: return npc_predictor.train()
+    try: return npc_predictor.train(system_ids=body.system_ids,auto_select=body.auto_select)
     except ValueError as e: raise HTTPException(400,str(e))
     finally: npc_train_lock.release()
 

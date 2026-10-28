@@ -83,17 +83,28 @@ def ingest_snapshot(source, source_end, observed_at, rows, quality='verified', m
     return True
 
 
-def observations(days=90, quality='verified', limit=MAX_ROWS):
+def configured_scope():
+    return [positive_int(int(s.strip())) for s in os.getenv('NPC_SYSTEM_IDS','').split(',') if s.strip()]
+
+
+def observations(days=90, quality='verified', limit=MAX_ROWS, system_ids=None, now=None):
     if quality not in QUALITIES: raise ValueError('Unknown quality.')
-    cutoff = (datetime.now(timezone.utc)-timedelta(days=days)).isoformat()
-    scope = [positive_int(int(s.strip())) for s in os.getenv('NPC_SYSTEM_IDS','').split(',') if s.strip()]
+    now = now or datetime.now(timezone.utc)
+    cutoff = (now-timedelta(days=days)).isoformat()
+    end = now.isoformat()
+    configured = configured_scope()
+    scope = configured if system_ids is None else [positive_int(s) for s in system_ids]
+    if configured and system_ids is not None and not set(scope).issubset(configured):
+        raise ValueError('Selected systems must be within NPC_SYSTEM_IDS.')
+    if system_ids is not None and not scope: return []
     clause = ' AND o.system_id IN ('+','.join('?' for _ in scope)+')' if scope else ''
     with closing(store.connect()) as c:
         rows = c.execute('''SELECT b.source,b.source_end,b.observed_at,b.quality,o.system_id,o.npc_kills,o.ship_kills,o.pod_kills
             FROM npc_batches b JOIN npc_observations o ON o.batch_id=b.id
-            WHERE b.source_end>=? AND b.quality=?'''+clause+' ORDER BY b.source_end,o.system_id LIMIT ?',
-            (cutoff,quality,*scope,limit+1)).fetchall()
-    if len(rows)>limit: raise ValueError('NPC analysis cap reached. Set NPC_SYSTEM_IDS to a smaller system scope.')
+            WHERE b.source_end>=? AND b.source_end<=? AND b.observed_at>=? AND b.observed_at<=?
+            AND b.source_end<=b.observed_at AND b.quality=?'''+clause+' ORDER BY b.source_end,o.system_id LIMIT ?',
+            (cutoff,end,cutoff,end,quality,*scope,limit+1)).fetchall()
+    if len(rows)>limit: raise ValueError('NPC analysis cap reached. Select fewer systems in the NPC training scope.')
     return [dict(r) for r in rows]
 
 

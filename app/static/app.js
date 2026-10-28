@@ -1,6 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
-const state = {view:'overview', days:30, profile:null, generation:0, mode:null, activity:null, selectedSystems:new Map(), trainingPreview:null, trainingBusy:false, analystLocation:null, analystChoices:new Map(), locationGeneration:0, lastRefreshAttempt:0};
+const state = {view:'overview', days:30, profile:null, generation:0, mode:null, activity:null, selectedSystems:new Map(), trainingPreview:null, trainingBusy:false, npcScope:null, npcAuto:true, npcSelected:new Set(), npcTrainingBusy:false, npcSelectionVersion:0, analystLocation:null, analystChoices:new Map(), locationGeneration:0, lastRefreshAttempt:0};
 const titles = {battles:['Battle watch','Find fresh combat signals, inspect recent losses, and follow the evidence.'],'system-activity':['System activity','Reported ESI activity beside locally collected killmail evidence.'],npc:['NPC intelligence','Source-timestamped ratting activity and evaluated count forecasts.'],overview:['Operational overview','Understand the activity. Follow the evidence.'],profiles:['Entity intelligence','Observed patterns, recurring associates, and supporting evidence.'],doctrines:['Doctrine analysis','Discover recurring ship and fitting patterns in recorded losses.'],forecasts:['Activity forecasts','Measured expectations, grounded in historical observations.'],analyst:['Your intel analyst','Turn collected evidence into a useful briefing.']};
 function node(tag,text,cls){const el=document.createElement(tag);if(text!==undefined&&text!==null)el.textContent=String(text);if(cls)el.className=cls;return el;}
 function clear(id){const el=typeof id==='string'?$(id):id;el.replaceChildren();return el;}
@@ -108,7 +108,62 @@ function forecasts(data){
  trainingSummary();limitations('forecast-limitations',data.limitations);
 }
 
-function npc(data){const source=data.source;const forecast=data.forecast;const totals=source.sources||[];$('npc-source-status').textContent=`${source.data_mode} NPC dataset · `+totals.map(x=>`${x.quality}: ${number(x.snapshots)} snapshots, ${number(x.observations)} rows`).join(' · ')+(source.last_error?' · '+source.last_error:'');$('npc-model-status').textContent=`Model: ${forecast.model?.status||'not_trained'} · ${forecast.model?.message||'Persistence baseline until evaluated.'} · ${forecast.stale_systems||0} systems withheld (stale or target period ended)`;metrics('npc-model-metrics',forecast.model?.metrics);table('npc-results',['System','Latest NPCs','Estimated NPCs','Target end (UTC)','Coverage 24h','Method'],(forecast.items||[]).map(i=>[systemCell(i.system_id,i.system_name),number(i.latest_npc_kills),sortCell(number(i.expected_npc_kills),i.expected_npc_kills),date(i.target_end),(Number(i.coverage_24h)*100).toFixed(0)+'%',i.method]));limitations('npc-limitations',[...(source.limitations||[]),...(forecast.limitations||[])]);}
+function saveNpcSelection(){try{localStorage.setItem('watcher-npc-selection',JSON.stringify({auto:state.npcAuto,ids:[...state.npcSelected]}));}catch{}}
+function npcSelection(){return state.npcAuto?{auto_select:true}:{system_ids:[...state.npcSelected]};}
+function npcSelectionIssue(){
+ const scope=state.npcScope;if(!scope)return 'System scope is unavailable.';
+ const ids=state.npcAuto?(scope.auto_system_ids||[]):[...state.npcSelected];
+ const count=state.npcAuto?Number(scope.auto_records||0):(scope.items||[]).filter(i=>state.npcSelected.has(i.system_id)).reduce((sum,i)=>sum+Number(i.records||0),0);
+ if(!ids.length)return scope.unavailable_reason||'Select at least one system with recorded NPC history.';
+ if(ids.length>scope.max_systems)return `Select no more than ${number(scope.max_systems)} systems.`;
+ if(count>scope.max_records)return `Selection exceeds the ${number(scope.max_records)}-record cap. Choose fewer systems.`;
+ return '';
+}
+function npcSelectionSummary(){
+ const scope=state.npcScope,ids=state.npcAuto?(scope?.auto_system_ids||[]):[...state.npcSelected];
+ const selected=(scope?.items||[]).filter(i=>ids.includes(i.system_id));
+ const count=state.npcAuto?Number(scope?.auto_records||0):selected.reduce((sum,i)=>sum+Number(i.records||0),0);
+ const issue=npcSelectionIssue();
+ $('npc-selection-status').textContent=scope?`${state.npcAuto?'Automatic selection':'Manual selection'} · ${number(ids.length)} / ${number(scope.max_systems)} systems · ${number(count)} / ${number(scope.max_records)} records · 0 LLM tokens. ${issue}`:'Loading NPC system scope…';
+ $('npc-selection-detail').textContent=scope?`Selected: ${selected.length?selected.map(i=>`${i.system_name||'System '+i.system_id} (${number(i.records)} records)`).join(', '):'none'}. ${state.npcAuto?'Automatic selection includes whole system histories that fit the cap; it may leave room unused. ':''}${scope.unavailable_reason||''}`:'';
+ $('npc-train').disabled=state.npcTrainingBusy||!!issue;
+ $('npc-apply').disabled=state.npcTrainingBusy||!!issue;
+ $('npc-auto').disabled=state.npcTrainingBusy||!scope;
+}
+function npcSelectionChanged(){state.npcSelectionVersion++;saveNpcSelection();npcSelectionSummary();clear('npc-model-metrics');limitations('npc-limitations',[]);empty('npc-results','Selection changed. Apply it to load estimates for these systems.');$('npc-model-status').textContent='Apply the current selection to load its estimates.';}
+function renderNpcScope(scope){
+ state.npcScope=scope;
+ const available=new Set((scope.items||[]).map(i=>i.system_id));
+ state.npcSelected=new Set([...state.npcSelected].filter(id=>available.has(id)));
+ $('npc-auto').checked=state.npcAuto;
+ const window=scope.window;
+ $('npc-scope-window').textContent=`Record window: ${window?.from?date(window.from)+' to '+date(window.through):'available observations'}. Counts include complete histories per system and refresh from the server; training checks eligibility again.`;
+ const q=$('npc-system-search').value.trim().toLowerCase();
+ const items=(scope.items||[]).filter(i=>`${i.system_name||''} ${i.system_id}`.toLowerCase().includes(q));
+ const rows=items.map(i=>{
+  const checkbox=node('input');checkbox.type='checkbox';checkbox.checked=state.npcAuto?(scope.auto_system_ids||[]).includes(i.system_id):state.npcSelected.has(i.system_id);checkbox.disabled=state.npcAuto||state.npcTrainingBusy;checkbox.setAttribute('aria-label',`Select ${i.system_name||'system '+i.system_id} (${number(i.records)} records)`);
+  checkbox.addEventListener('change',()=>{if(checkbox.checked)state.npcSelected.add(i.system_id);else state.npcSelected.delete(i.system_id);npcSelectionChanged();});
+  return [sortCell(checkbox,()=>checkbox.checked?1:0),systemCell(i.system_id,i.system_name),sortCell(number(i.records),i.records),date(i.first_observed_at),date(i.last_observed_at),i.history_ready?'21+ days observed':'History not yet ready'];
+ });
+ table('npc-scope-results',['Select','System','NPC records','First received (UTC)','Last received (UTC)','Training history'],rows);
+ if(!rows.length)empty('npc-scope-results',q?'No systems match this search.':'No systems have recorded NPC history in this scope.');
+ npcSelectionSummary();
+}
+function npcSource(source){const totals=source.sources||[];$('npc-source-status').textContent=`${source.data_mode} NPC dataset · `+totals.map(x=>`${x.quality}: ${number(x.snapshots)} snapshots, ${number(x.observations)} rows`).join(' · ')+(source.last_error?' · '+source.last_error:'');}
+function npcForecast(forecast){$('npc-model-status').textContent=`Model: ${forecast.model?.status||'not_trained'} · ${forecast.model?.message||'Persistence baseline until evaluated.'} · ${forecast.stale_systems||0} systems withheld (stale or target period ended)`;metrics('npc-model-metrics',forecast.model?.metrics);table('npc-results',['System','Latest NPCs','Estimated NPCs','Target end (UTC)','Coverage 24h','Method'],(forecast.items||[]).map(i=>[systemCell(i.system_id,i.system_name),number(i.latest_npc_kills),sortCell(number(i.expected_npc_kills),i.expected_npc_kills),date(i.target_end),(Number(i.coverage_24h)*100).toFixed(0)+'%',i.method]));limitations('npc-limitations',forecast.limitations||[]);}
+async function loadNpc(generation){
+ const [scopeResult,sourceResult]=await Promise.allSettled([api('/api/npc/training-scope'),api('/api/npc/status')]);
+ if(generation!==state.generation)return;
+ if(sourceResult.status==='fulfilled')npcSource(sourceResult.value);else $('npc-source-status').textContent='NPC source status unavailable: '+sourceResult.reason.message;
+ if(scopeResult.status==='rejected'){state.npcScope=null;npcSelectionSummary();empty('npc-scope-results','NPC system scope unavailable: '+scopeResult.reason.message);empty('npc-results','Forecast unavailable while system scope cannot be loaded.');return;}
+ renderNpcScope(scopeResult.value);
+ const issue=npcSelectionIssue();
+ if(issue){clear('npc-model-metrics');empty('npc-results',issue);$('npc-model-status').textContent='Choose a valid NPC system scope to load estimates.';return;}
+ const version=state.npcSelectionVersion;
+ const query=state.npcAuto?'auto_select=true':'system_ids='+encodeURIComponent([...state.npcSelected].join(','));
+ try{const forecast=await api('/api/npc/forecast?'+query);if(generation===state.generation&&version===state.npcSelectionVersion)npcForecast(forecast);}
+ catch(err){if(generation===state.generation&&version===state.npcSelectionVersion){clear('npc-model-metrics');empty('npc-results','Forecast unavailable: '+err.message);$('npc-model-status').textContent='Forecast unavailable: '+err.message;limitations('npc-limitations',[]);}}
+}
 function systemActivity(data){
  state.activity=data;
  const label=data.data_mode==='demo'?'Synthetic demo':'ESI';
@@ -167,7 +222,7 @@ function filteredSystems(items){
  const q=($('system-search')?.value||'').trim().toLowerCase(),sort=$('system-sort')?.value||'kills';
  return items.filter(i=>String(i.system_name).toLowerCase().includes(q)).sort((a,b)=>sort==='name'?a.system_name.localeCompare(b.system_name):sort==='npc'?(b.npc_kills??-1)-(a.npc_kills??-1):b.reported_killmails-a.reported_killmails);
 }
-async function load(){state.lastRefreshAttempt=Date.now();const generation=++state.generation;const view=state.view;$('refresh').disabled=true;error('');$(view).classList.add('loading');$(view).setAttribute('aria-busy','true');try{await status();let data;if(view==='battles')data=await api('/api/battles?'+new URLSearchParams({hours:$('battle-hours').value,mode:$('battle-mode').value,fresh_minutes:$('battle-fresh-minutes').value,...($('battle-space').value?{space:$('battle-space').value}:{})}));else if(view==='system-activity')data=await api(`/api/system-activity?hours=${$('activity-hours').value}`);else if(view==='overview')data=await api(`/api/overview?days=${state.days}`);else if(view==='doctrines')data=await api(`/api/doctrines?days=${state.days}`);else if(view==='forecasts'){const [forecast,training]=await Promise.all([api('/api/forecast?days=90'),api('/api/training-scope?mode='+encodeURIComponent($('training-mode').value))]);data={...forecast,training};}else if(view==='npc')data={forecast:await api('/api/npc/forecast'),source:await api('/api/npc/status')};else if(view==='profiles'&&state.profile)data=await api(`/api/profile/${state.profile.kind}/${state.profile.id}?days=${state.days}`);if(generation!==state.generation)return;if(data)({battles,'system-activity':systemActivity,overview,doctrines,forecasts,profiles:profile,npc})[view](data);}catch(err){if(generation===state.generation)error(err.message);}finally{$(view).classList.remove('loading');$(view).setAttribute('aria-busy','false');if(generation===state.generation)$('refresh').disabled=false;}}
+async function load(){state.lastRefreshAttempt=Date.now();const generation=++state.generation;const view=state.view;$('refresh').disabled=true;error('');$(view).classList.add('loading');$(view).setAttribute('aria-busy','true');try{if(view==='npc'){status().catch(()=>{});await loadNpc(generation);return;}await status();let data;if(view==='battles')data=await api('/api/battles?'+new URLSearchParams({hours:$('battle-hours').value,mode:$('battle-mode').value,fresh_minutes:$('battle-fresh-minutes').value,...($('battle-space').value?{space:$('battle-space').value}:{})}));else if(view==='system-activity')data=await api(`/api/system-activity?hours=${$('activity-hours').value}`);else if(view==='overview')data=await api(`/api/overview?days=${state.days}`);else if(view==='doctrines')data=await api(`/api/doctrines?days=${state.days}`);else if(view==='forecasts'){const [forecast,training]=await Promise.all([api('/api/forecast?days=90'),api('/api/training-scope?mode='+encodeURIComponent($('training-mode').value))]);data={...forecast,training};}else if(view==='profiles'&&state.profile)data=await api(`/api/profile/${state.profile.kind}/${state.profile.id}?days=${state.days}`);if(generation!==state.generation)return;if(data)({battles,'system-activity':systemActivity,overview,doctrines,forecasts,profiles:profile})[view](data);}catch(err){if(generation===state.generation)error(err.message);}finally{$(view).classList.remove('loading');$(view).setAttribute('aria-busy','false');if(generation===state.generation)$('refresh').disabled=false;}}
 document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>{state.view=button.dataset.view;try{localStorage.setItem('watcher-view',state.view);}catch{}document.querySelectorAll('.view').forEach(v=>v.hidden=v.id!==state.view);document.querySelectorAll('[data-view]').forEach(b=>{b.classList.toggle('active',b===button);if(b===button)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current');});$('page-title').replaceChildren(document.createTextNode(titles[state.view][0]),node('span','.'));$('page-description').textContent=titles[state.view][1];$('breadcrumb-view').textContent=state.view.toUpperCase();$('analyst-profile').disabled=!state.profile||$('analyst-area').value!=='auto';analystScopeStatus();$('window-control').hidden=['analyst','forecasts','npc','system-activity','battles'].includes(state.view);load();}));
 $('refresh').addEventListener('click',load);$('days').addEventListener('change',()=>{state.days=Number($('days').value);load();});
 $('profile-form').addEventListener('submit',async event=>{event.preventDefault();const id=Number($('entity-id').value);if(!Number.isSafeInteger(id)||id<=0){error('Enter a valid positive EVE entity ID.');return;}state.profile={kind:$('entity-kind').value,id};await load();});
@@ -193,11 +248,24 @@ $('chat-form').addEventListener('submit',async event=>{event.preventDefault();co
  }else if(state.profile&&$('analyst-profile').checked){body.entity_kind=state.profile.kind;body.entity_id=state.profile.id;}
  if(!$('analyst-hours').disabled&&$('analyst-hours').value)body.hours=Number($('analyst-hours').value);
  const data=await api('/api/chat',body);const mode={retrieval:'DATA SUMMARY',local_llm:'LOCAL MODEL',local_agent:'LOCAL AGENT'}[data.mode]||'LOCAL';reply.replaceChildren(node('strong',`INTEL ANALYST · ${mode}`,'message-label'),document.createTextNode(data.answer));if(data.tokens_used||data.tools_used?.length)reply.append(node('p',`${number(data.tokens_used)} inference tokens${data.tools_used?.length?' · Queries: '+data.tools_used.join(', '):''}`,'footnote'));evidence(reply,data.evidence);await status();}catch(err){reply.replaceChildren(node('strong','REQUEST COULD NOT COMPLETE','message-label'),document.createTextNode(err.message));$('question').value=question;}finally{$('ask').disabled=false;conversation.scrollTop=conversation.scrollHeight;}});
+try{const saved=JSON.parse(localStorage.getItem('watcher-npc-selection')||'null');if(saved&&typeof saved.auto==='boolean'){state.npcAuto=saved.auto;state.npcSelected=new Set((Array.isArray(saved.ids)?saved.ids:[]).filter(id=>Number.isSafeInteger(id)&&id>0));}}catch{}
+$('npc-auto').checked=state.npcAuto;
 let rememberedView;try{rememberedView=localStorage.getItem('watcher-view');}catch{}
 const rememberedButton=Array.from(document.querySelectorAll('[data-view]')).find(b=>b.dataset.view===rememberedView);
-if(rememberedButton&&rememberedView!=='overview')rememberedButton.click();else load();setInterval(()=>{const interval=state.view==='battles'&&$('battle-mode').value==='fresh'?15000:60000;if(!document.hidden&&state.view!=='analyst'&&!$('refresh').disabled&&Date.now()-state.lastRefreshAttempt>=interval)load();},1000);
+if(rememberedButton&&rememberedView!=='overview')rememberedButton.click();else load();setInterval(()=>{const interval=state.view==='battles'&&$('battle-mode').value==='fresh'?15000:60000;if(!document.hidden&&state.view!=='analyst'&&!state.npcTrainingBusy&&!$('refresh').disabled&&Date.now()-state.lastRefreshAttempt>=interval)load();},1000);
 
-$('npc-train').addEventListener('click',async()=>{$('npc-train').disabled=true;$('npc-train-status').textContent='Evaluating NPC counts against chronological baselines…';try{const result=await api('/api/npc/train',{});$('npc-train-status').textContent=result.message||result.status;await load();}catch(e){$('npc-train-status').textContent=e.message;}finally{$('npc-train').disabled=false;}});
+$('npc-auto').addEventListener('change',()=>{state.npcAuto=$('npc-auto').checked;npcSelectionChanged();if(state.npcScope)renderNpcScope(state.npcScope);});
+$('npc-system-search').addEventListener('input',()=>{if(state.npcScope)renderNpcScope(state.npcScope);});
+$('npc-apply').addEventListener('click',()=>{if(!npcSelectionIssue())load();});
+$('npc-train').addEventListener('click',async()=>{
+ if(npcSelectionIssue()||state.npcTrainingBusy)return;
+ state.npcTrainingBusy=true;state.npcSelectionVersion++;npcSelectionSummary();
+ document.querySelectorAll('#npc-scope-results input').forEach(el=>el.disabled=true);
+ $('npc-train-status').textContent='Evaluating selected NPC systems against chronological baselines…';
+ try{const result=await api('/api/npc/train',npcSelection());const names=new Map((state.npcScope?.items||[]).map(i=>[i.system_id,i.system_name||'System '+i.system_id]));$('npc-train-status').textContent=`${result.message||result.status} Trained on ${number(result.systems?.length)} systems and ${number(result.records)} records: ${(result.systems||[]).map(id=>`${names.get(id)||'System '+id} (${id})`).join(', ')||'none'}. 0 LLM tokens.`;}
+ catch(e){$('npc-train-status').textContent=e.message;}
+ finally{state.npcTrainingBusy=false;await load();}
+});
 
 $('activity-hours').addEventListener('change',load);
 

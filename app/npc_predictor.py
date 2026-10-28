@@ -29,10 +29,13 @@ def _now(value):
     return _dt(value) if value is not None else datetime.now(timezone.utc)
 
 
-def _load(now):
+def _load(now, system_ids=None):
     from . import npc_store
-    live = npc_store.observations(days=90, quality='verified')
-    demo = npc_store.observations(days=90, quality='synthetic')
+    kwargs = {'days': 90, 'now': now, 'limit': npc_store.MAX_ROWS}
+    if system_ids is not None:
+        kwargs['system_ids'] = system_ids
+    live = npc_store.observations(quality='verified', **kwargs)
+    demo = npc_store.observations(quality='synthetic', **kwargs)
     if live and demo:
         raise ValueError('Mixed synthetic and verified NPC history is not eligible for forecasting.')
     mode = 'demo' if store.get_state('npc_data_mode', store.get_state('data_mode', 'empty')) == 'demo' else 'live'
@@ -98,17 +101,19 @@ def _pairs(rows, now):
 
 def model_status():
     model = store.get_state('npc_model', {})
-    return {key: model[key] for key in ('status', 'trained_at', 'metrics', 'message', 'data_mode') if key in model} or {
+    return {key: model[key] for key in ('status', 'trained_at', 'metrics', 'message', 'data_mode', 'systems', 'records', 'scope_mode') if key in model} or {
         'status': 'not_trained', 'metrics': {}}
 
 
-def train(now=None):
+def train(now=None, system_ids=None, auto_select=False):
     import numpy as np
     from sklearn.linear_model import Ridge
     from sklearn.preprocessing import StandardScaler
 
+    from . import npc_scope
     now = _now(now)
-    grouped, mode = _load(now)
+    selected_scope, _ = npc_scope.resolve(system_ids, auto_select, now)
+    grouped, mode = _load(now, selected_scope)
     all_rows = [r for rows in grouped.values() for r in rows]
     if not all_rows:
         raise ValueError('No eligible verified NPC history. Legacy imports are description-only.')
@@ -118,8 +123,11 @@ def train(now=None):
         raise ValueError('Need at least 21 days of verified receipt-time NPC history.')
     split = first + (last - first) * .75
     # Select systems using only observations that had arrived before the shared split.
-    available = [sid for sid in grouped if any(r['_received'] < split for r in grouped[sid])]
-    selected = sorted(available, key=lambda sid: sum(r['_received'] < split for r in grouped[sid]), reverse=True)[:24]
+    if selected_scope is None:
+        available = [sid for sid in grouped if any(r['_received'] < split for r in grouped[sid])]
+        selected = sorted(available, key=lambda sid: sum(r['_received'] < split for r in grouped[sid]), reverse=True)[:24]
+    else:
+        selected = selected_scope
     training, testing = [], []
     for sid in selected:
         for pair in _pairs(grouped[sid], now):
@@ -155,7 +163,9 @@ def train(now=None):
                'seasonal_coverage': seasonal_coverage, 'target': 'Next source-reported hourly NPC count',
                'promotion_rule': 'At least 2% lower chronological holdout MAE than the strongest evaluated baseline'}
     model = {'status': 'experimental' if accepted else 'baseline_retained', 'trained_at': now.isoformat(),
-             'data_mode': mode, 'systems': selected, 'features': FEATURES, 'metrics': metrics,
+             'data_mode': mode, 'systems': selected, 'records': len(all_rows),
+             'scope_mode': 'auto' if auto_select else ('manual' if system_ids is not None else 'default'),
+             'features': FEATURES, 'metrics': metrics,
              'mean': scaler.mean_.tolist(), 'scale': scaler.scale_.tolist(),
              'coef': estimator.coef_.tolist(), 'intercept': float(estimator.intercept_),
              'message': 'Experimental model passed the holdout gate; estimates remain uncalibrated.' if accepted else
@@ -165,9 +175,11 @@ def train(now=None):
     return model_status()
 
 
-def forecast(now=None):
+def forecast(now=None, system_ids=None, auto_select=False):
+    from . import npc_scope
     now = _now(now)
-    grouped, mode = _load(now)
+    selected_scope, _ = npc_scope.resolve(system_ids, auto_select, now)
+    grouped, mode = _load(now, selected_scope)
     model = store.get_state('npc_model', {})
     valid_model = (model.get('data_mode') == mode and model.get('trained_at') is not None and
                    timedelta(0) <= now - _dt(model['trained_at']) < timedelta(days=7))
